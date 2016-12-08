@@ -1,0 +1,572 @@
+C51 COMPILER V9.52.0.0   TERMINAL                                                          01/28/2016 10:05:48 PAGE 1   
+
+
+C51 COMPILER V9.52.0.0, COMPILATION OF MODULE TERMINAL
+OBJECT MODULE PLACED IN .\debug\terminal.obj
+COMPILER INVOKED BY: D:\Program Files (x86)\keil\C51\BIN\C51.EXE terminal.c OPTIMIZE(7,SPEED) BROWSE DEBUG OBJECTEXTEND 
+                    -PRINT(.\debug\terminal.lst) OBJECT(.\debug\terminal.obj)
+
+line level    source
+
+   1          /*******************************************************************************
+   2          *文件名: terminal.c
+   3          *作  者: 王文辉
+   4          *单  位: 唐山智能电子有限公司
+   5          *日  期: 2012-9-21
+   6          *版  本: 实验版本
+   7          *功能描述: 串口的初始化及发送接收程序
+   8          *******************************************************************************/
+   9          #include "terminal.h"
+  10          #include "24c04.h"
+  11          #include "weighting.h"
+  12          #include "timer.h"
+  13          extern s16bit xdata drop_weight,residual_weight,zero_scale_value;
+  14          extern u16bit xdata sp_weight,sf_weight,sf_weight_adj_val,weight_correct_val,
+  15                              shut_fb_w,WeightOfLast;
+  16          extern u8bit xdata  err_code,filter_coefficient,sf_switch,ol_track_sw,
+  17                              w_save_cnt,filter_coefficient1,DpSwitch;
+  18          extern u8bit xdata  track_bags,cl_correct_sw,arrival_time,counter_sw,
+  19                              CommAddr;
+  20          extern bit          t0_flag,t1_flag;
+  21          extern u32bit xdata load_cell_span,scale_output_val,scale_counterweight_val,
+  22                              tare_weight,DropCounter,bags;
+  23          extern s32bit xdata adc;
+  24          bit RxDoneFlag;
+  25          bit ResetFlag = 0;
+  26          u8bit xdata RxBuf[60],TxBuf[70];
+  27          
+  28          u8bit data_in_len;                                          //数据交换输入（实验板发送）数据长度
+  29          u8bit dil;                                                  //不包括校验和的data_in_len长度
+  30          u8bit data_out_len;                                         //数据交换输出（实验板接收）数据长度
+  31          u8bit dol;                                                  //不包括校验和的data_out_len长度
+  32          u8bit user_prm_len;                                         //用户参数长度
+  33          u8bit br_num = 5;
+  34          
+  35          
+  36          sfr16 RCAP2    = 0xCA;                                      // Timer2 capture/reload
+  37          sfr16 TMR2     = 0xCC;                                      // Timer2
+  38          
+  39          
+  40          #define SYSCLK       22118400L
+  41          
+  42          
+  43          
+  44          void uart0_init(u32bit baudrate)
+  45          {
+  46   1          char SFRPAGE_SAVE;
+  47   1          SFRPAGE_SAVE = SFRPAGE;             // Preserve SFRPAGE
+  48   1          SFRPAGE = TMR2_PAGE;
+  49   1          TMR2CN = 0x00;                      // Timer in 16-bit auto-reload up timer
+  50   1          TMR2CF = 0x08;                      // SYSCLK is time base; no output;
+  51   1          RCAP2 = - ((long) SYSCLK/baudrate/16);
+  52   1          TMR2 = RCAP2;
+  53   1          TR2 = 1;                            // Start Timer2
+  54   1          SFRPAGE = UART0_PAGE;
+C51 COMPILER V9.52.0.0   TERMINAL                                                          01/28/2016 10:05:48 PAGE 2   
+
+  55   1          SCON0 = 0xD0;                       // 9-bit variable baud rate;
+  56   1          SSTA0 = 0x15;                       // Clear all flags; enable baud rate
+  57   1                                              // doubler (not relevant for these
+  58   1                                              // timers);
+  59   1                                              // Use Timer2 as RX and TX baud rate
+  60   1                                              // source;
+  61   1          //RI0 = 1;                          // Indicate TX0 ready
+  62   1          ES0 = 0;
+  63   1          TI0 = 1;
+  64   1          SFRPAGE = SFRPAGE_SAVE;             // Restore SFRPAGE
+  65   1      }
+  66          
+  67          #if DP_ON
+  68          u8bit UartPutchar(u8bit ch)reentrant
+  69          {
+  70   1          SFRPAGE     = UART0_PAGE;
+  71   1          while(TI0 == 0);                    // USCI_A0 TX buffer ready?
+  72   1          TI0         = 0;
+  73   1          ACC         = ch;
+  74   1          TB80        = P;                           //第九位数据位偶校验位
+  75   1          SBUF0       = ACC;
+  76   1          SFRPAGE     = CONFIG_PAGE;
+  77   1          return ch;
+  78   1      }
+  79          
+  80          
+  81          //这里写DP通信的程序
+  82          u8bit PbGetchar(u8bit *ch)
+  83          {
+  84   1          u8bit pErr_flag = 0;
+  85   1          
+  86   1          SFRPAGE = UART0_PAGE;
+  87   1          while(!RI0){                                            //在规定时间内能够完成数据交换的读取的前提下
+  88   2              if(S_RTS==0) return TIMEOUT;
+  89   2          }
+  90   1          if(RI0){
+  91   2              ACC = SBUF0;
+  92   2              if(P != RB80) pErr_flag=1;                          //偶校验错，置偶校验错标志
+  93   2              *ch = ACC;                                          //接收一个字符送串口输入缓冲区
+  94   2              RI0 = 0;
+  95   2          }
+  96   1          SFRPAGE = CONFIG_PAGE;
+  97   1          return pErr_flag;
+  98   1      }
+  99          u8bit pb_init(void)
+ 100          {
+ 101   1          bit pbinit_flag = 0;
+ 102   1          u32bit TimeOutCnt = 0;
+ 103   1          u8bit i,x,cnt = 0;
+ 104   1          //形成接口板的初始化报文****************************************************
+ 105   1      
+ 106   1          data_in_len =64+1+1;                                        //输入数据报文长度=48+1+1=50
+ 107   1          user_prm_len=0;                                             //用户参数长度=0
+ 108   1          data_out_len=48+1+1;                                        //输入数据报文长度=64+1+1=66
+ 109   1          TxBuf[0]    =CommAddr;                                      //BYTE0=从站地址
+ 110   1          TxBuf[1]    =0x06;                                          //BYTE1=ID号高位
+ 111   1          TxBuf[2]    =0xfa;                                          //BYTE2=ID号低位
+ 112   1          TxBuf[3]    =7;                                             //I/O配置数据长度=7；
+ 113   1          TxBuf[4]    =0x1f;                                          //I/O配置数据：0x1f,0x2f,0x1f,0x2f,0x1f,0x
+             -2f,0x1f
+ 114   1          TxBuf[5]    =0x2f;                 
+ 115   1          TxBuf[6]    =0x1f;
+C51 COMPILER V9.52.0.0   TERMINAL                                                          01/28/2016 10:05:48 PAGE 3   
+
+ 116   1          TxBuf[7]    =0x2f;
+ 117   1          TxBuf[8]    =0x1f;
+ 118   1          TxBuf[9]    =0x2f;
+ 119   1          TxBuf[10]   =0x1f;
+ 120   1          TxBuf[24]   =data_in_len;                                  //输入数据报文长度
+ 121   1          TxBuf[25]   =data_out_len;                                 //输出数据报文长度
+ 122   1          TxBuf[26]   =user_prm_len;                                 //用户参数长度
+ 123   1      
+ 124   1          //求校验和******************************************************************
+ 125   1          TxBuf[48]   =0;
+ 126   1          for(i=0;i<48;i++)   TxBuf[48]=TxBuf[48]+TxBuf[i];
+ 127   1          //发送初始化报文,直到初始化成功*********************************************
+ 128   1          while(1){
+ 129   2              nRST        = 0;
+ 130   2              TimeOutCnt  = 4888;
+ 131   2              while(--TimeOutCnt);
+ 132   2              nRST        = 1;
+ 133   2              TimeOutCnt  = 0;
+ 134   2              while(S_RTS){                                       //等待se进入准备好接收状态
+ 135   3                  if(++TimeOutCnt > 110592) return TIMEOUT;
+ 136   3              }
+ 137   2              for(i=0;i<49;i++) UartPutchar(TxBuf[i]);            //发送初始化报文
+ 138   2              TimeOutCnt = 0;
+ 139   2              while(!S_RTS){                                      //等待SE接收完毕
+ 140   3                  if(++TimeOutCnt > 110592) return TIMEOUT;
+ 141   3              }
+ 142   2              //发送完毕、等待接收回答************************************************
+ 143   2              for(i=0;i<49;i++){                                  //接受回答报文共49个字节
+ 144   3                  x = PbGetchar(&RxBuf[i]);
+ 145   3                  if(x) break;                                    //如果发生错误,退出循环.
+ 146   3              }
+ 147   2              //以下分析接口板SE的回答报文********************************************
+ 148   2              if(x == 0){
+ 149   3                  for(i=0;i<48;i++) x+=RxBuf[i];                  //求校验和
+ 150   3                  if(x==RxBuf[48]){                               //校验和正确?
+ 151   4                      if(RxBuf[0]==br_num){                       //返回的波特率号是5?
+ 152   5                          if(RxBuf[1]==0){                        //初始化报文错误号N=0?
+ 153   6                              for(i=2;i<48;i++){                  //byte2~byte47都是0xaa?
+ 154   7                                  if(RxBuf[i]!=0xaa) break;
+ 155   7                              }
+ 156   6                              if(i==48) break;                    //初始化成功,退出循环
+ 157   6                              else cnt++;                         //初始化失败,失败计数
+ 158   6                              if(cnt > 20) return E11;            //20次初始化失败后,放弃初始化返回.
+ 159   6                          }
+ 160   5                      }
+ 161   4                  }
+ 162   3              }
+ 163   2          }
+ 164   1          for(i=0;i<60;i++)   RxBuf[i]=0;
+ 165   1          return GOOD;
+ 166   1      }
+ 167          
+ 168          u8bit PbRestart(void)
+ 169          {
+ 170   1          u8bit PbRerr = 0;
+ 171   1          if((DpSwitch == ON) && REQ_IT){
+ 172   2              EA=0;
+ 173   2              PbRerr = pb_init();
+ 174   2              EA=1;
+ 175   2          }
+ 176   1          return PbRerr;
+ 177   1      }
+C51 COMPILER V9.52.0.0   TERMINAL                                                          01/28/2016 10:05:48 PAGE 4   
+
+ 178          
+ 179          void PbTare(void)
+ 180          {
+ 181   1          if(DpSwitch == ON){
+ 182   2              if(RxBuf[31] & BIT0){                               //联网去皮
+ 183   3                  if((TxBuf[48] & BIT0) == 0){
+ 184   4                      zero_scale_value = 0;
+ 185   4                      tare_weight = GW_measure();
+ 186   4                      eeprom_write((u8bit *)&tare_weight,TW_ADDR,4);
+ 187   4                      TxBuf[48] |= BIT0;
+ 188   4                  }
+ 189   3              }
+ 190   2              else TxBuf[48] &= ~BIT0;
+ 191   2          }
+ 192   1      }
+ 193          
+ 194          void PbNW_measure(void)
+ 195          {
+ 196   1          s32bit adcval;
+ 197   1          u8bit *p_temp;
+ 198   1          if(DpSwitch == ON){
+ 199   2              adcval = NW_measure();
+ 200   2              p_temp = (u8bit *)&adcval;
+ 201   2              TxBuf[50] = *p_temp++;
+ 202   2              TxBuf[51] = *p_temp++;
+ 203   2              TxBuf[52] = *p_temp++;
+ 204   2              TxBuf[53] = *p_temp++;
+ 205   2          }
+ 206   1      }
+ 207          u8bit DpDataExchange(void)
+ 208          {
+ 209   1          u8bit i=0,error;
+ 210   1          u16bit upara16;
+ 211   1          s16bit spara16;
+ 212   1          u32bit upara32,TimeOutCnt = 0;
+ 213   1          u8bit *ppp;
+ 214   1          dil=data_in_len-1;
+ 215   1          dol=data_out_len-1;
+ 216   1          {
+ 217   2              //初始化计数器到PB主站的数据************************************************
+ 218   2              TxBuf[0]    = 0;                                    //没有用户参数，请求数据命令为0，请求A型报文
+ 219   2              ppp         = (u8bit *)&sp_weight;                  //袋重设定值,OK
+ 220   2              TxBuf[1]    = *ppp++;
+ 221   2              TxBuf[2]    = *ppp++;
+ 222   2              TxBuf[3]    = filter_coefficient;                   //滤波系数,OK
+ 223   2              ppp         = (u8bit *)&sf_weight_adj_val;          //粗细流切换值,OK
+ 224   2              TxBuf[4]    = *ppp++;
+ 225   2              TxBuf[5]    = *ppp++;
+ 226   2              TxBuf[6]    = sf_switch;                            //粗细流切换开关,OK
+ 227   2              ppp         = (u8bit *)&drop_weight;                //落差,OK
+ 228   2              TxBuf[7]    = *ppp++;
+ 229   2              TxBuf[8]    = *ppp++;
+ 230   2              TxBuf[9]    = ol_track_sw;                          //开环追踪开关,OK
+ 231   2              TxBuf[10]   = track_bags;                           //追踪袋数,OK
+ 232   2              ppp         = (u8bit *)&residual_weight;            //净差,OK
+ 233   2              TxBuf[11]   = *ppp++;
+ 234   2              TxBuf[12]   = *ppp++;
+ 235   2              TxBuf[13]   = cl_correct_sw;                        //闭环校正开关,OK
+ 236   2              ppp         = (u8bit *)&weight_correct_val;         //袋重修正值
+ 237   2              TxBuf[14]   = *ppp++;
+ 238   2              TxBuf[15]   = *ppp++;
+ 239   2              TxBuf[16]   = arrival_time;                         //抵达时间,OK
+C51 COMPILER V9.52.0.0   TERMINAL                                                          01/28/2016 10:05:48 PAGE 5   
+
+ 240   2              TxBuf[17]   = counter_sw;                           //掉包计数器开关OK
+ 241   2              ppp         = (u8bit *)&load_cell_span;             //传感器量程,OK
+ 242   2              TxBuf[18]   = *ppp++;
+ 243   2              TxBuf[19]   = *ppp++;
+ 244   2              TxBuf[20]   = *ppp++;
+ 245   2              TxBuf[21]   = *ppp++;
+ 246   2              ppp         = (u8bit *)&scale_output_val;           //传感器砝码输出值,OK
+ 247   2              TxBuf[22]   = *ppp++;
+ 248   2              TxBuf[23]   = *ppp++;
+ 249   2              TxBuf[24]   = *ppp++;
+ 250   2              TxBuf[25]   = *ppp++;
+ 251   2              ppp         = (u8bit *)&scale_counterweight_val;    //传感器砝码输出值,OK
+ 252   2              TxBuf[26]   = *ppp++;
+ 253   2              TxBuf[27]   = *ppp++;
+ 254   2              TxBuf[28]   = *ppp++;
+ 255   2              TxBuf[29]   = *ppp++;
+ 256   2              ppp         = (u8bit *)&tare_weight;                //皮重,OK
+ 257   2              TxBuf[30]   = *ppp++;
+ 258   2              TxBuf[31]   = *ppp++;
+ 259   2              TxBuf[32]   = *ppp++;
+ 260   2              TxBuf[33]   = *ppp++;
+ 261   2              //TxBuf[34] = 参数设置错误;                          //于参数初始化更新
+ 262   2              //TxBuf[35] = 标定参数错误;                          //于参数初始化更新
+ 263   2              TxBuf[36]   = 0;                                    //系统错误标志1
+ 264   2              TxBuf[37]   = 0;                                    //系统错误标志2
+ 265   2              if(!SizeFlowOut)    TxBuf[38] |= BIT7;
+ 266   2              else TxBuf[38] &= ~BIT7;
+ 267   2              if(!FullOut)    TxBuf[38] |= BIT6;
+ 268   2              else TxBuf[38] &= ~BIT6;
+ 269   2              if(!discharge_bag_sw_out) TxBuf[38] |= BIT5;
+ 270   2              else TxBuf[38] &= ~BIT5;
+ 271   2              if(!clamping_bag_out) TxBuf[38] |= BIT4;
+ 272   2              else TxBuf[38] &= ~BIT4;
+ 273   2              if(!fill_mot_sw_out)    TxBuf[38] |= BIT3;
+ 274   2              else TxBuf[38] &= ~BIT3;
+ 275   2              
+ 276   2              ppp         = (u8bit *)&DropCounter;                //掉包计数器,于计数器增加位置更新
+ 277   2              TxBuf[39]   = *ppp++;
+ 278   2              TxBuf[40]   = *ppp++;
+ 279   2              TxBuf[41]   = *ppp++;
+ 280   2              TxBuf[42]   = *ppp++;
+ 281   2              
+ 282   2              ppp         = (u8bit *)&WeightOfLast;
+ 283   2              TxBuf[43]   = *ppp++;
+ 284   2              TxBuf[44]   = *ppp++;
+ 285   2      
+ 286   2              if(adc < 0) upara16 = 0;
+ 287   2              else        upara16 = (u16bit)adc;
+ 288   2              ppp         = (u8bit *)&upara16;
+ 289   2              TxBuf[45]   = *ppp++;
+ 290   2              TxBuf[46]   = *ppp++;
+ 291   2      //        TxBuf[47] 更新完成标志
+ 292   2      //        TxBuf[48] 更新完成标志2
+ 293   2      //        TxBuf[49] 输入信号
+ 294   2      //        TxBuf[50-53] 净重值.
+ 295   2              //其他参数于参数设置,初始化,及pb数据交互完成********************************
+ 296   2          }
+ 297   1          TxBuf[dil]  = 0;
+ 298   1          for(i=0;i<dil;i++) TxBuf[dil]=TxBuf[dil]+TxBuf[i];      //求校验和
+ 299   1      
+ 300   1          TimeOutCnt  = 0;
+ 301   1          while(S_RTS){                                           //等待se进入准备好接收状态
+C51 COMPILER V9.52.0.0   TERMINAL                                                          01/28/2016 10:05:48 PAGE 6   
+
+ 302   2              if(++TimeOutCnt > 110592) return TIMEOUT;
+ 303   2          }
+ 304   1      
+ 305   1          for(i=0;i<data_in_len;i++) UartPutchar(TxBuf[i]);
+ 306   1      
+ 307   1          TimeOutCnt  = 0;
+ 308   1          while(!S_RTS){                                          //等待SE接收完毕
+ 309   2              if(++TimeOutCnt > 110592) return TIMEOUT;
+ 310   2          }
+ 311   1      
+ 312   1          for(i=0;i<data_out_len;i++){                            //等待接收接口板的应答报文 
+ 313   2              error = PbGetchar(&RxBuf[i]);
+ 314   2              if(error) break;
+ 315   2          }
+ 316   1          if(error == 0){                                         //实验板接收回答报文长度正确
+ 317   2              error = 0;
+ 318   2              for(i=0;i<dol;i++)      error = error + RxBuf[i];   //求校验和
+ 319   2              if(error != RxBuf[dol]) error = B_SUMCHECK;         //校验和错
+ 320   2              else error = 0;
+ 321   2          }
+ 322   1          if(error) return error;
+ 323   1          
+ 324   1          {//接收到的数据刷新
+ 325   2              if(RxBuf[32]&BIT2){                                 //强制关闸板
+ 326   3                  cyl_sw_out = SHUT;
+ 327   3                  fine_flow_out = SHUT;
+ 328   3              }
+ 329   2              if(RxBuf[32]&BIT1){
+ 330   3                  fill_mot_sw_out = SHUT;                         //强制关灌装电机
+ 331   3              }
+ 332   2      
+ 333   2              if((RxBuf[30] & BIT0) == BIT0){                     //更新袋重设定值及滤波系数
+ 334   3                  if((TxBuf[47] & BIT0) == 0){
+ 335   4                      ppp = (u8bit *)&upara16;
+ 336   4                      *ppp++ = RxBuf[1];
+ 337   4                      *ppp++ = RxBuf[2];
+ 338   4                      if((upara16>=22000) && (upara16<=65000)){
+ 339   5                          shut_fb_w = shut_fb_w + upara16 - sp_weight;//关闸板判别值调整
+ 340   5                          sf_weight = shut_fb_w - sf_weight_adj_val;
+ 341   5                          sp_weight = upara16;
+ 342   5                          ee_write((u8bit *)&sp_weight,SP_WEIGHT_ADDR,2);
+ 343   5                          TxBuf[34] &= ~BIT6;                     //清除设定值报警
+ 344   5                      }
+ 345   4                      else TxBuf[34] |= BIT6;                     //设定值报警
+ 346   4                          
+ 347   4                      if(RxBuf[3] <= 90){
+ 348   5                          filter_coefficient = RxBuf[3];
+ 349   5                          ee_write(&filter_coefficient,FILTER_ADDR,1);
+ 350   5                          filter_coefficient1 = (uchar)filter_coefficient * 1.1;
+ 351   5                          TxBuf[34] &= ~BIT7;                     //清除滤波系数报警
+ 352   5                      }
+ 353   4                      else TxBuf[34] |= BIT7;                     //滤波系数报警
+ 354   4                          
+ 355   4                      TxBuf[47] |= BIT0;
+ 356   4                  }
+ 357   3              }
+ 358   2              else TxBuf[47] &= ~BIT0;                            //复位已更新标志
+ 359   2                  
+ 360   2              if((RxBuf[30] & BIT1) == BIT1){                     //更新粗细流设定值,粗细流开关
+ 361   3                  if((TxBuf[47] & BIT1) == 0){
+ 362   4                      ppp = (u8bit *)&upara16;
+ 363   4                      *ppp++ = RxBuf[4];
+C51 COMPILER V9.52.0.0   TERMINAL                                                          01/28/2016 10:05:48 PAGE 7   
+
+ 364   4                      *ppp++ = RxBuf[5];
+ 365   4                      if((upara16>=100) && (upara16<=10000)){
+ 366   5                          sf_weight_adj_val = upara16;
+ 367   5                          sf_weight = shut_fb_w - sf_weight_adj_val;
+ 368   5                          ee_write((u8bit *)&sf_weight_adj_val,SF_WEIGHT_ADDR,2);
+ 369   5                          TxBuf[34] &= ~BIT5;                     //清除粗细流设定值报警
+ 370   5                      }
+ 371   4                      else TxBuf[34] |= BIT5;                     //粗细流报警
+ 372   4                      if((RxBuf[6] == ON) || (RxBuf[6] == OFF)){
+ 373   5                          sf_switch = RxBuf[6];
+ 374   5                          ee_write(&sf_switch,SF_SWITCH_ADDR,1);
+ 375   5                      }
+ 376   4                      TxBuf[47] |= BIT1;
+ 377   4                  }
+ 378   3              }
+ 379   2              else TxBuf[47] &= ~BIT1;                            //复位已更新标志
+ 380   2      
+ 381   2              if((RxBuf[30] & BIT2) == BIT2){                     //更新标定参数
+ 382   3                  if((TxBuf[47] & BIT2) == 0){
+ 383   4                      ppp = (u8bit *)&upara32;
+ 384   4                      *ppp++ = RxBuf[18];
+ 385   4                      *ppp++ = RxBuf[19];
+ 386   4                      *ppp++ = RxBuf[20];
+ 387   4                      *ppp++ = RxBuf[21];
+ 388   4                      if((upara32 == 100000) || (upara32 == 150000) ||
+ 389   4                         (upara32 == 200000) || (upara32 == 250000) ||
+ 390   4                         (upara32 == 300000) || (upara32 == 350000)){
+ 391   5                          load_cell_span = upara32;
+ 392   5                          ee_write((u8bit *)&load_cell_span,CELL_SPAN_ADDR,4);
+ 393   5                          TxBuf[35] &= ~BIT7;                     //清除量程非法报警
+ 394   5                      }
+ 395   4                      else TxBuf[35] |= BIT7;                     //量程非法报警
+ 396   4                      
+ 397   4                      ppp = (u8bit *)&upara32;
+ 398   4                      *ppp++ = RxBuf[22];
+ 399   4                      *ppp++ = RxBuf[23];
+ 400   4                      *ppp++ = RxBuf[24];
+ 401   4                      *ppp++ = RxBuf[25];
+ 402   4                      if((upara32 >= 19000) && (upara32 <= 62000)){
+ 403   5                          scale_output_val = upara32;
+ 404   5                          ee_write((u8bit *)&scale_output_val,SCALE_OUTPUT_ADDR,4);
+ 405   5                          TxBuf[35] &= ~BIT4;                     //清除标定输出值报警
+ 406   5                      }
+ 407   4                      else TxBuf[35] |= BIT4;                     //标定输出值报警
+ 408   4                          
+ 409   4                      ppp = (u8bit *)&upara32;
+ 410   4                      *ppp++ = RxBuf[26];
+ 411   4                      *ppp++ = RxBuf[27];
+ 412   4                      *ppp++ = RxBuf[28];
+ 413   4                      *ppp++ = RxBuf[29];
+ 414   4                      if((upara32 >= 20000) && (upara32 <= 60000)){
+ 415   5                          scale_counterweight_val = upara32;
+ 416   5                          ee_write((u8bit *)&scale_counterweight_val,COUNTERWEIGHT_ADDR,4);
+ 417   5                          TxBuf[35] &= ~BIT3;                     //清除标定砝码值报警
+ 418   5                      }
+ 419   4                      else TxBuf[35] |= BIT3;                     //标定砝码值报警
+ 420   4                      TxBuf[47] |= BIT2;
+ 421   4                  }
+ 422   3              }
+ 423   2              else TxBuf[47] &= ~BIT2;                            //复位已更新标志
+ 424   2                  
+ 425   2              if((RxBuf[30] & BIT3) == BIT3){                     //更新手动落差,袋重净差
+C51 COMPILER V9.52.0.0   TERMINAL                                                          01/28/2016 10:05:48 PAGE 8   
+
+ 426   3                  if((TxBuf[47] & BIT3) == 0){
+ 427   4                      ppp = (u8bit *)&spara16;
+ 428   4                      *ppp++ = RxBuf[7];
+ 429   4                      *ppp++ = RxBuf[8];
+ 430   4                      if((spara16 >= -2500) && (spara16 <= 2500)){
+ 431   5                          shut_fb_w = shut_fb_w + spara16 - drop_weight;//更新关闸板判别值
+ 432   5                          sf_weight = shut_fb_w - sf_weight_adj_val;
+ 433   5                          drop_weight = spara16;
+ 434   5                          ee_write((u8bit *)&drop_weight,DROP_WEIGHT_ADDR,2);
+ 435   5                          TxBuf[34] &= ~BIT4;                     //清除落差报警
+ 436   5                      }
+ 437   4                      else TxBuf[34] |= BIT4;
+ 438   4                      ppp = (u8bit *)&spara16;
+ 439   4                      *ppp++ = RxBuf[11];
+ 440   4                      *ppp++ = RxBuf[12];
+ 441   4                      if((spara16 >= -2500) && (spara16 <= 2500)){
+ 442   5                          residual_weight = spara16;
+ 443   5                          ee_write((u8bit *)&residual_weight,R_WEIGHT_ADDR,2);
+ 444   5                          TxBuf[34] &= ~BIT3;                     //清除净差报警
+ 445   5                      }
+ 446   4                      else TxBuf[34] |= BIT3;
+ 447   4                      TxBuf[47] |= BIT3;
+ 448   4                  }
+ 449   3              }
+ 450   2              else TxBuf[47] &= ~BIT3;                            //复位已更新标志
+ 451   2      
+ 452   2              if((RxBuf[30] & BIT4) == BIT4){                     //更新开环追踪开关,跟踪袋数
+ 453   3                  if((TxBuf[47] & BIT4) == 0){
+ 454   4                      if((RxBuf[9] == ON) || (RxBuf[9] == OFF)){
+ 455   5                          ol_track_sw = RxBuf[9];
+ 456   5                          if((ol_track_sw == ON) && (cl_correct_sw == ON)){
+ 457   6                              ol_track_sw = OFF;
+ 458   6                              cl_correct_sw = OFF;
+ 459   6                              TxBuf[34] |= BIT0;
+ 460   6                          }
+ 461   5                          else TxBuf[34] &= ~BIT0;                //追踪开关与自校正开关冲突
+ 462   5                          ee_write(&ol_track_sw,OL_TRACK_SW_ADDR,1);
+ 463   5                      }
+ 464   4                      if((RxBuf[10] < 11) && (RxBuf[10] > 0)){
+ 465   5                          track_bags = RxBuf[10];
+ 466   5                          ee_write(&track_bags,TRACK_BAGS_ADDR,1);
+ 467   5                          TxBuf[35] &= ~BIT1;                     //清除袋重修正值报警
+ 468   5                      }
+ 469   4                      else TxBuf[35] |= BIT1;                     //袋重修正值报警
+ 470   4                      TxBuf[47] |= BIT4;
+ 471   4                  }
+ 472   3              }
+ 473   2              else TxBuf[47] &= ~BIT4;                            //复位已更新标志
+ 474   2                                          
+ 475   2              if((RxBuf[30] & BIT5) == BIT5){                     //更新掉包计数器开关
+ 476   3                  if((TxBuf[47] & BIT5) == 0){
+ 477   4                      if((RxBuf[17] == ON) || (RxBuf[17] == OFF)){
+ 478   5                          counter_sw = RxBuf[17];
+ 479   5                          TxBuf[17] = counter_sw;
+ 480   5                          ee_write(&counter_sw,COUTER_SW_ADDR,1);
+ 481   5                      }
+ 482   4                  TxBuf[47] |= BIT5;
+ 483   4                  }
+ 484   3              }
+ 485   2              else TxBuf[47] &= ~BIT5;                            //复位已更新标志
+ 486   2                  
+ 487   2              if((RxBuf[30] & BIT6) == BIT6){                     //更新袋重修正值,闭环校正开关,抵达时间
+C51 COMPILER V9.52.0.0   TERMINAL                                                          01/28/2016 10:05:48 PAGE 9   
+
+ 488   3                  if((TxBuf[47] & BIT6) == 0){
+ 489   4                      ppp = (u8bit *)&upara16;
+ 490   4                      *ppp++ = RxBuf[14];
+ 491   4                      *ppp++ = RxBuf[15];
+ 492   4                      if((upara16 >= 0) && (upara16 <= 1500)){
+ 493   5                          weight_correct_val = upara16;
+ 494   5                          ee_write((u8bit *)&weight_correct_val,WEIGHT_CORRECT_ADDR,2);
+ 495   5                          TxBuf[34] &= ~BIT2;                     //清除袋重修正值报警
+ 496   5                      }
+ 497   4                      else TxBuf[34] |= BIT2;                     //袋重修正值报警
+ 498   4                          
+ 499   4                      if((RxBuf[13] == ON) || (RxBuf[13] == OFF)){
+ 500   5                          cl_correct_sw = RxBuf[13];
+ 501   5                          if((ol_track_sw == ON) && (cl_correct_sw == ON)){
+ 502   6                              ol_track_sw = OFF;
+ 503   6                              cl_correct_sw = OFF;
+ 504   6                              TxBuf[34] |= BIT0;                  //追踪开关与自校正开关冲突
+ 505   6                          }
+ 506   5                          else TxBuf[34] &= ~BIT0;
+ 507   5                          ee_write(&cl_correct_sw,CL_CORRECT_SW_ADDR,1);
+ 508   5                      }
+ 509   4                      if(RxBuf[16] != 0){
+ 510   5                          arrival_time = RxBuf[16];
+ 511   5                          ee_write(&arrival_time,ARRIVAL_TIME_ADDR,1);
+ 512   5                          TxBuf[34] &= ~BIT1;                     //清除抵达时间报警
+ 513   5                      }
+ 514   4                      else TxBuf[34] |= BIT1;
+ 515   4                      TxBuf[47] |= BIT6;
+ 516   4                  }
+ 517   3              }
+ 518   2              else TxBuf[47] &= ~BIT6;                            //复位已更新标志
+ 519   2                  
+ 520   2              if((RxBuf[30] & BIT7) == BIT7){                     //更新掉包计数器清零.
+ 521   3                  if((TxBuf[47] & BIT7) == 0){
+ 522   4                      DropCounter = 0;
+ 523   4                      TxBuf[47] |= BIT7;
+ 524   4                  }
+ 525   3              }
+ 526   2              else TxBuf[47] &= ~BIT7;                            //复位已更新标志
+ 527   2          }
+ 528   1          return GOOD;                                            //返回数据交换完成标示
+ 529   1      }
+ 530          
+ 531          #endif  //end of DP_ON
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   4063    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =    130    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =      6      32
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      2       1
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

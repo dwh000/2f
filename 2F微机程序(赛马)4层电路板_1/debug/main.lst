@@ -1,0 +1,723 @@
+C51 COMPILER V9.52.0.0   MAIN                                                              01/28/2016 10:05:48 PAGE 1   
+
+
+C51 COMPILER V9.52.0.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\debug\main.obj
+COMPILER INVOKED BY: D:\Program Files (x86)\keil\C51\BIN\C51.EXE main.c OPTIMIZE(7,SPEED) BROWSE DEBUG OBJECTEXTEND PRIN
+                    -T(.\debug\main.lst) OBJECT(.\debug\main.obj)
+
+line level    source
+
+   1          /*******************************************************************************
+   2          *文件名: 2F1主程序.c
+   3          *作  者: 王文辉
+   4          *单  位: 唐山智能电子有限公司
+   5          *日  期: 2012-9-21
+   6          *版  本: 实验版本
+   7          *功能描述: 2f包机程序
+   8          *******************************************************************************/
+   9          
+  10          /*头文件引用*******************************************************************/
+  11          #include "public.h"                     //延时函数,端口定义,类型定义及宏定义
+  12          #include "disp.h"                       //显示函数
+  13          #include "24c04.h"                      //参数保存及读取
+  14          #include "key_func.h"           //按键相关函数
+  15          #include "menu_func.h"          //菜单相关函数
+  16          #include "timer.h"                      //定时器初始化及配置
+  17          #include "weighting.h"          //AD,称重,标度变换及滤波
+  18          #include "terminal.h"           //串口初始化及串口读写
+  19          #include <stdio.h>                      //C标准IO函数
+  20          
+  21          
+  22          /*全局变量定义*****************************************************************/
+  23          s16bit xdata    drop_weight,                            //手动落差值
+  24                          residual_weight,                        //袋重净差值
+  25                          zero_scale_value;                       //零标度值
+  26          u32bit xdata    filter2_out = 0,                        //一阶低通滤波器输出值
+  27                                          filter1_out,                            //中值平均值滤波输出
+  28                                          load_cell_span,                         //传感器测量范围
+  29                                          tare_weight,                            //皮重
+  30                                          scale_output_val,                       //标定点砝码输出值
+  31                                          scale_counterweight_val;        //标定点砝码值
+  32          u32bit xdata    DropCounter _at_ 0x180;         //掉包计数器,指定存储地址为0x180,xdata区域,并且该区域内存不清零
+  33          u16bit xdata    sp_weight,                                      //袋重设置值
+  34                                          sf_weight,                                      //粗细流切换重量
+  35                          sf_weight_adj_val,          //
+  36                                          weight_correct_val,                     //袋重修正值
+  37                                          shut_fb_w;                                      //关闸板判别值
+  38          u8bit xdata     ZeroFlag,                   //过清零点标志
+  39                          ZeroCnt = 0,                    //清零点计数.
+  40                          DpErrCnt = 0,               //用于DP通讯错误的计时
+  41                          DpErrFlag = 0,              //DP通讯错误标志
+  42                          t1_cnt,                                         //t1定时器计数个数
+  43                                          shut_cnt,                                       //关闸板判别计数
+  44                                          filter_coefficient,                     //滤波系数
+  45                                          filter_coefficient1,            //计算后的滤波系数
+  46                                          err_code = 0,                           //错误代码
+  47                                          sf_switch,                                      //粗细流开关
+  48                                          ol_track_sw,                            //开环追踪开关
+  49                                          track_bags,                                     //追踪袋数
+  50                                          w_save_cnt = 0,                         //袋重保存计数
+  51                                          cl_correct_sw,                          //闭环修正开关
+  52                                          arrival_time,                           //抵达时间
+  53                                          A_T_time = 0,                           //抵达时间暂存值
+  54                                          counter_sw,                                     //计数开关
+C51 COMPILER V9.52.0.0   MAIN                                                              01/28/2016 10:05:48 PAGE 2   
+
+  55                                          disp_cache,                                     //断码显示缓存
+  56                                          CommAddr,                                       //通信地址
+  57                                          DpSwitch,                                       //通信功能开关
+  58                                          DispCnt,                                        //显示计数器
+  59                                          flashboard_cnt;                         //关闸板定时时间,单位0.1s
+  60          bit                             t1_flag,                                        //T1定时溢出标志
+  61                                          startup_flag = 0,                       //开机标志
+  62                                          DropFlag = 0,                           //掉袋标志
+  63                                          AutoZeroFlag = 0,                       //自动清零标志
+  64                                          discharge_bag_loc_flag = 0,     //掉袋点标志
+  65                                          flashboard_pulse_flag,          //关闸板定时溢出标志
+  66                                          re_fill_flag,                           //重新灌装标志
+  67                                          DpEnFlag = 0,                           //Pb数据交换软件使能.
+  68                                          discharge_pulse_flag = 0,       //掉袋定时溢出标志
+  69                                          shut_flag = 0,                          //关闸板判别标志
+  70                                          disp_flag = 1;                          //显示标志
+  71          u16bit xdata    weight[10],                             //追踪时,袋重备份;用于修正关闸判别值.
+  72                          WeightOfLast;
+  73          s32bit xdata    adc,adc_disp;                                   //AD转换换算后的袋重值
+  74          
+  75          
+  76          /*外部变量引用*****************************************************************/
+  77          extern u8bit code       seg_sym[40];                    //字符段码
+  78          extern u8bit code       seg_dot[40];
+  79          extern u8bit xdata      TxBuf[70],RxBuf[60];
+  80          
+  81          
+  82          /*函数声明*********************************************************************/
+  83          void mcu_init();                                                        //单片机初始化函数
+  84          void update_shut_fb_w(u8bit bags);
+  85          void ZeroPointDet(void);
+  86          void ShutAndCorrect(void);
+  87          
+  88          
+  89          /*输入端口位定义****************************************************************
+  90          sbit    discharge_bag_en                = P1^0; /* 皮带连锁
+  91          sbit    zero_loc                                = P2^0; /* 清零点
+  92          sbit    discharge_bag_loc               = P2^1; /* 掉袋点 
+  93          sbit    open_flashboard_det             = P2^2; /* 开闸门信号 *
+  94          sbit    gate_opened_loc                 = P2^3; /* 闸门已开启 *
+  95          sbit    bag_det                                 = P2^4; /* 插袋信号 *
+  96          sbit    add_correct                             = P2^5; /* 检重秤+校正信号 *
+  97          sbit    reduce_correct                  = P2^6; /* 检重秤-校正信号 *
+  98          sbit    into_bag_loc                    = P2^7;  插袋点 
+  99          
+ 100          sbit FullOut                                    =       P3^1;           //袋重装满输出
+ 101          sbit SizeFlowOut                                =       p3^2;           //粗细流切换输出
+ 102          //输出端口位定义****************************************************************
+ 103          sbit cyl_sw_out                                 =       P3^1;           //气缸开关
+ 104          sbit fine_flow_out                              =       P3^2;           //粗细流切换输出
+ 105          sbit discharge_bag_sw_out               =       P3^3;           //卸袋
+ 106          sbit flashboard_sw_out                  =       P3^4;           //关闸板
+ 107          sbit fill_mot_sw_out                    =       P3^5;           //电机使能
+ 108          sbit clamping_bag_out                   =       P3^4;           //压袋*************************/
+ 109          
+ 110          
+ 111          
+ 112          
+ 113          /*主函数***********************************************************************/
+ 114          void main(void)
+ 115          {
+ 116   1          mcu_init();                                             //单片机初始化
+C51 COMPILER V9.52.0.0   MAIN                                                              01/28/2016 10:05:48 PAGE 3   
+
+ 117   1      
+ 118   1          /*上电自动清零*************************************************************/
+ 119   1          zero_scale_value = 0; 
+ 120   1          zero_scale_value = NW_scale();
+ 121   1          /*while((zero_scale_value < -3500) || (zero_scale_value > 3500)){*/
+ 122   1              if(zero_scale_value > 3500){
+ 123   2                  disp_symbol(ERR_OH);
+ 124   2                  zero_scale_value = 0;
+ 125   2              }
+ 126   1              else if(zero_scale_value < -3500){
+ 127   2                  disp_symbol(ERR_OL);
+ 128   2                  zero_scale_value = 0;
+ 129   2              }
+ 130   1              menu_func();                                        //调用菜单函数
+ 131   1              tare_zero_func();                                   //调用去皮清零函数
+ 132   1          //}
+ 133   1      
+ 134   1          #if saima
+ 135   1          FullOut = SHUT;
+ 136   1          SizeFlowOut = SHUT;
+ 137   1      
+ 138   1          while(1){
+ 139   2              s32bit xdata shut_error;
+ 140   2              #if DP_ON
+ 141   2                  if(PbRestart() == TIMEOUT){                                    //检测PB状态并重启PB连接
+ 142   3                      DpErrCnt ++ ;
+ 143   3                      if(DpErrCnt > 3){
+ 144   4                          DpSwitch = OFF;
+ 145   4                          DpErrFlag = 1;
+ 146   4                      }
+ 147   3                  }
+ 148   2                  PbTare();                                       //联网去皮操作
+ 149   2                  PbNW_measure();                                 //联网标称数据刷新
+ 150   2              #endif
+ 151   2              //参数修改及显示时重
+ 152   2              menu_func();                                        //调用菜单函数
+ 153   2              dm_sp_weight();                                     //调用直接修改设定值函数
+ 154   2              tare_zero_func();                                   //调用去皮清零函数
+ 155   2              adc = NW_scale();
+ 156   2              {/*刷新显示数据*/
+ 157   3                  if(zero_loc == ACTIVE){
+ 158   4                      if(ZeroCnt == 1){
+ 159   5                          DispZeroLoc();
+ 160   5                      }
+ 161   4                      else if(ZeroCnt == 2){
+ 162   5                          Disp50kgLoc();
+ 163   5                      }
+ 164   4                      ZeroFlag = 1;
+ 165   4                  }
+ 166   3                  else if(DpErrFlag)   DispDpERRSet();
+ 167   3                  else{
+ 168   4                      DispZeroRst();
+ 169   4                      if(ZeroFlag == 1){
+ 170   5                          if(ZeroCnt == 1)    ZeroCnt = 2;
+ 171   5                          else if(ZeroCnt == 2)    ZeroCnt = 1;
+ 172   5                          ZeroFlag = 0;
+ 173   5                      }
+ 174   4                  }
+ 175   3                  DispBagDetRst();
+ 176   3                  if(adc_disp - adc > 200)    disp_flag = 1;
+ 177   3                  if(adc - adc_disp > 200)    disp_flag = 1;
+ 178   3                  if(disp_flag){
+C51 COMPILER V9.52.0.0   MAIN                                                              01/28/2016 10:05:48 PAGE 4   
+
+ 179   4                      adc_disp = adc;
+ 180   4                      run_disp(adc_disp);
+ 181   4                      DispCnt = 0;
+ 182   4                      disp_flag = 0;
+ 183   4                  }
+ 184   3              }
+ 185   2      
+ 186   2              if(adc >= 5000){
+ 187   3                  if(sf_switch == ON){
+ 188   4                      if(adc < 20000){
+ 189   5                          SizeFlowOut = SHUT;
+ 190   5                      }
+ 191   4                      else if(adc>=sf_weight){
+ 192   5                          SizeFlowOut = OPEN;
+ 193   5                      }
+ 194   4                  }
+ 195   3                  if(adc > (shut_fb_w - 3000)) DpEnFlag = 0;
+ 196   3                  //关闸板判别程序
+ 197   3                  shut_error = adc - shut_fb_w;
+ 198   3                  if(shut_error > 500){
+ 199   4                      ShutAndCorrect();
+ 200   4                  }
+ 201   3                  else if((shut_error > 200) && (shut_flag == 1)){
+ 202   4                      ShutAndCorrect();
+ 203   4                  }
+ 204   3                  else if(shut_error >= 0){
+ 205   4                      shut_flag = 1;
+ 206   4                      shut_cnt++;
+ 207   4                      if(shut_cnt == 3)   ShutAndCorrect();
+ 208   4                  }
+ 209   3                  else{
+ 210   4                      shut_cnt = 0;
+ 211   4                  }
+ 212   3              }
+ 213   2              else    ZeroPointDet();
+ 214   2          }
+ 215   1          #endif  //end of saima
+ 216   1      }
+ 217          
+ 218          
+ 219          /*******************************************************************************
+ 220          *原  型:void ZeroPointDet(void)
+ 221          *形  参:无
+ 222          *功  能:用于过零点检测及过零点清零
+ 223          *返回值:无.
+ 224          *******************************************************************************/
+ 225          void ZeroPointDet(void)
+ 226          {
+ 227   1          s16bit xdata czero_scale_value;
+ 228   1          if(startup_flag)    return;
+ 229   1          if((DropFlag) && (zero_loc == ACTIVE)){
+ 230   2              czero_scale_value = zero_scale_value;
+ 231   2              zero_scale_value = 0;
+ 232   2              adc = NW_scale_clr();
+ 233   2              if((adc > 3500) || (adc < -3500)){//清零点测量值超过清零范围,则
+ 234   3                  zero_scale_value = czero_scale_value;
+ 235   3                  if(adc > 3500) disp_symbol(ERR_OH);
+ 236   3                  else if(adc < -3500) disp_symbol(ERR_OL);
+ 237   3              }
+ 238   2              else{//清零点测量值在清零范围内,则
+ 239   3                  DispZeroClr();
+ 240   3                  run_disp(adc);
+C51 COMPILER V9.52.0.0   MAIN                                                              01/28/2016 10:05:48 PAGE 5   
+
+ 241   3                  zero_scale_value = adc;
+ 242   3              }
+ 243   2              DropFlag = 0;
+ 244   2              while(zero_loc == ACTIVE);
+ 245   2              ZeroCnt = 2;
+ 246   2              ZeroFlag = 0;
+ 247   2          }
+ 248   1      }
+ 249          
+ 250          void ShutAndCorrect(void)
+ 251          {
+ 252   1          u16bit DropVal = (sp_weight/5)<<1;                      //掉袋判别值
+ 253   1          disp_flag = 1;
+ 254   1          SizeFlowOut = OPEN;
+ 255   1          FullOut = OPEN;
+ 256   1          DpEnFlag = 1;
+ 257   1          shut_cnt = 0;
+ 258   1          shut_flag = 0;
+ 259   1          Disp50kgRst();
+ 260   1          DispZeroRst();
+ 261   1          while(adc >= DropVal){
+ 262   2              adc = NW_scale();
+ 263   2              #if DP_ON
+ 264   2              PbNW_measure();                                     //联网标称数据刷新
+ 265   2              #endif
+ 266   2              if(zero_loc == ACTIVE){
+ 267   3                  Disp50kgLoc();
+ 268   3                  t1_100ms(10);
+ 269   3                  disp_flag = 0;
+ 270   3                  while(zero_loc == ACTIVE);
+ 271   3                  Disp50kgRst();
+ 272   3                  WeightOfLast = (u16bit)adc;               //备份当前袋重
+ 273   3                  weight[w_save_cnt] = WeightOfLast;
+ 274   3                  w_save_cnt++;
+ 275   3                  if(w_save_cnt == track_bags) w_save_cnt = 0;
+ 276   3              }
+ 277   2              else Disp50kgRst();
+ 278   2              DispBagDetRst();
+ 279   2              if(disp_flag)   run_disp(adc);
+ 280   2              if(t1_flag){
+ 281   3                  t1_stop();
+ 282   3                  t1_flag = 0;
+ 283   3                  disp_flag = 1;
+ 284   3              }
+ 285   2          }
+ 286   1          ZeroCnt = 1;
+ 287   1          ZeroFlag = 0;
+ 288   1          FullOut = SHUT;
+ 289   1          SizeFlowOut = SHUT;
+ 290   1          t1_stop();
+ 291   1          DropFlag = 1;
+ 292   1          if(counter_sw == ON)    DropCounter++;
+ 293   1      
+ 294   1          startup_flag = 0;
+ 295   1          if(cl_correct_sw == ON)     t4_50ms_cl_track(arrival_time);
+ 296   1          else if(ol_track_sw == ON)  update_shut_fb_w(track_bags);
+ 297   1      }
+ 298          
+ 299          
+ 300          
+ 301          
+ 302          
+C51 COMPILER V9.52.0.0   MAIN                                                              01/28/2016 10:05:48 PAGE 6   
+
+ 303          
+ 304          
+ 305          
+ 306          
+ 307          
+ 308          
+ 309          
+ 310          
+ 311          
+ 312          
+ 313          
+ 314          
+ 315          
+ 316          
+ 317          
+ 318          
+ 319          
+ 320          
+ 321          
+ 322          
+ 323          
+ 324          
+ 325          
+ 326          
+ 327          
+ 328          
+ 329          
+ 330          
+ 331          
+ 332          
+ 333          
+ 334          
+ 335          
+ 336          
+ 337          
+ 338          
+ 339          
+ 340          
+ 341          
+ 342          
+ 343          
+ 344          
+ 345          
+ 346          
+ 347          
+ 348          //****************************************************************************//
+ 349          //                                                      公共部分子程序                                                                    //
+ 350          //****************************************************************************//
+ 351          
+ 352          /*******************************************************************************
+ 353          *原  型:void Port_IO_Init(void);
+ 354          *形  参:无.
+ 355          *功  能:IO端口配置.
+ 356          *返回值:无.
+ 357          *******************************************************************************/
+ 358          void Port_IO_Init(void)
+ 359          {
+ 360   1          SFRPAGE   = CONFIG_PAGE;
+ 361   1          P0MDOUT   = 0x90;
+ 362   1          P1MDOUT   = 0x06;
+ 363   1          P3MDOUT   = 0xFE;
+ 364   1          P4MDOUT   = 0xE0;
+C51 COMPILER V9.52.0.0   MAIN                                                              01/28/2016 10:05:48 PAGE 7   
+
+ 365   1          P6MDOUT   = 0xFF;
+ 366   1          P7MDOUT   = 0xFF;
+ 367   1          XBR0      = 0x04;//0x05;
+ 368   1          XBR2      = 0x40;
+ 369   1          
+ 370   1          P1 = 0XFF;
+ 371   1          P2 = 0XFF;
+ 372   1          P3 = 0XFF;
+ 373   1          P4 = 0XFF;
+ 374   1          P5 = 0XFF;
+ 375   1          P6 = 0XFF;
+ 376   1          P7 = 0XFF;
+ 377   1      }
+ 378          /*******************************************************************************
+ 379          *原  型:void stop_wdt(void);
+ 380          *形  参:无.
+ 381          *功  能:关闭看门狗.
+ 382          *返回值:无.
+ 383          *******************************************************************************/
+ 384          void stop_wdt(void)
+ 385          {
+ 386   1              EA = 0;
+ 387   1              WDTCN = 0XDE;
+ 388   1              WDTCN = 0XAD;
+ 389   1      }
+ 390          /*******************************************************************************
+ 391          *原  型:void sysclk_init(void);
+ 392          *形  参:无.
+ 393          *功  能:系统时钟初始化.
+ 394          *返回值:无.
+ 395          *******************************************************************************/
+ 396          void sysclk_init(void)
+ 397          {
+ 398   1              u16bit i;
+ 399   1              SFRPAGE = CONFIG_PAGE;
+ 400   1              OSCXCN = 0X67;
+ 401   1              for(i=0;i<3000;i++);
+ 402   1              while((OSCXCN & 0x80) == 0)     ;
+ 403   1              CLKSEL = 0X01;
+ 404   1              OSCICN = 0x03;
+ 405   1              return;
+ 406   1      }
+ 407          void save_all(void)
+ 408          {
+ 409   1              u8bit Start_1stFlag = ON;
+ 410   1              //保存DP开关
+ 411   1              DpSwitch = OFF;
+ 412   1              eeprom_write(&DpSwitch,DP_SW_ADDR,1);
+ 413   1              
+ 414   1              //保存DP地址
+ 415   1              CommAddr = 1;
+ 416   1              eeprom_write(&CommAddr,COMMADDR_ADDR,1);
+ 417   1              
+ 418   1              //保存滤波系数
+ 419   1              filter_coefficient = 80;
+ 420   1              eeprom_write(&filter_coefficient,FILTER_ADDR,1);
+ 421   1              
+ 422   1              //保存设定值
+ 423   1              sp_weight = 50000;
+ 424   1              eeprom_write((u8bit *)&sp_weight,SP_WEIGHT_ADDR,2);
+ 425   1              
+ 426   1              //保存传感器量程
+C51 COMPILER V9.52.0.0   MAIN                                                              01/28/2016 10:05:48 PAGE 8   
+
+ 427   1              load_cell_span = 350000;
+ 428   1              eeprom_write((u8bit *)&load_cell_span,CELL_SPAN_ADDR,4);
+ 429   1              
+ 430   1              //保存标定输出值
+ 431   1              scale_output_val = 34306;
+ 432   1              eeprom_write((u8bit *)&scale_output_val,SCALE_OUTPUT_ADDR,4);
+ 433   1              
+ 434   1              //保存标定砝码重量
+ 435   1              scale_counterweight_val = 40000;
+ 436   1              eeprom_write((u8bit *)&scale_counterweight_val,COUNTERWEIGHT_ADDR,4);
+ 437   1              
+ 438   1              //保存追踪袋数
+ 439   1              track_bags = 5;
+ 440   1              eeprom_write(&track_bags,TRACK_BAGS_ADDR,1);
+ 441   1              
+ 442   1              //保存粗细流切换开关
+ 443   1              sf_switch = OFF;
+ 444   1              eeprom_write(&sf_switch,SF_SWITCH_ADDR,1);
+ 445   1              
+ 446   1              //保存粗细流切换值
+ 447   1              sf_weight_adj_val = 5000;
+ 448   1              eeprom_write((u8bit *)&sf_weight_adj_val,SF_WEIGHT_ADDR,2);
+ 449   1          
+ 450   1              //保存落差
+ 451   1              drop_weight = 0;
+ 452   1              eeprom_write((u8bit *)&drop_weight,DROP_WEIGHT_ADDR,2);
+ 453   1              
+ 454   1              //保存净差
+ 455   1              residual_weight = 0;
+ 456   1              eeprom_write((u8bit *)&residual_weight,R_WEIGHT_ADDR,2);
+ 457   1              
+ 458   1              //保存袋重修正值
+ 459   1              weight_correct_val = 0;
+ 460   1              eeprom_write((u8bit *)&weight_correct_val,WEIGHT_CORRECT_ADDR,2);
+ 461   1              
+ 462   1              //保存抵达时间
+ 463   1              arrival_time = 0;
+ 464   1              eeprom_write(&arrival_time,ARRIVAL_TIME_ADDR,1);
+ 465   1              
+ 466   1              //保存开环追踪开关
+ 467   1              ol_track_sw = OFF;
+ 468   1              eeprom_write(&ol_track_sw,OL_TRACK_SW_ADDR,1);
+ 469   1              
+ 470   1              //保存闭环校正开关
+ 471   1              cl_correct_sw = OFF;
+ 472   1              eeprom_write(&cl_correct_sw,CL_CORRECT_SW_ADDR,1);
+ 473   1              
+ 474   1              //保存计数器开关
+ 475   1              counter_sw = OFF;
+ 476   1              eeprom_write(&counter_sw,COUTER_SW_ADDR,1);
+ 477   1              
+ 478   1              eeprom_write(&Start_1stFlag,START_1ST_ADDR,1);
+ 479   1      }
+ 480          void read_all(void)
+ 481          {
+ 482   1              u8bit cnt;
+ 483   1              #if DP_ON
+ 484   1              u8bit err_temp = GOOD;
+ 485   1              #endif
+ 486   1              
+ 487   1              //读取DP通信开关
+ 488   1              eeprom_read(&DpSwitch,DP_SW_ADDR,1);
+C51 COMPILER V9.52.0.0   MAIN                                                              01/28/2016 10:05:48 PAGE 9   
+
+ 489   1              //读取DP通信地址.
+ 490   1              eeprom_read(&CommAddr,COMMADDR_ADDR,1);
+ 491   1              while(CommAddr > 60 || CommAddr == 0){
+ 492   2                      disp_symbol(E15);
+ 493   2                      menu_func();
+ 494   2              }
+ 495   1              
+ 496   1              #if DP_ON
+ 497   1          cnt = 0;
+ 498   1              while(DpSwitch == ON){
+ 499   2                      EA = 0;
+ 500   2                      if(err_temp == GOOD) err_temp = pb_init();
+ 501   2                      EA = 1;
+ 502   2                      if(err_temp == GOOD)    break;
+ 503   2                      else    disp_symbol(E11);
+ 504   2                      menu_func();
+ 505   2              }
+ 506   1      
+ 507   1              #endif
+ 508   1              DpEnFlag = 1;
+ 509   1      
+ 510   1              //读取滤波系数
+ 511   1              eeprom_read(&filter_coefficient,FILTER_ADDR,1);
+ 512   1      
+ 513   1              if(filter_coefficient > 90){
+ 514   2                      filter_coefficient = 60;
+ 515   2                      eeprom_write(&filter_coefficient,FILTER_ADDR,1);
+ 516   2              }
+ 517   1              filter_coefficient1 = (uchar)filter_coefficient * 1.1;
+ 518   1                      
+ 519   1              //读取设定值    
+ 520   1              eeprom_read((u8bit *)&sp_weight,SP_WEIGHT_ADDR,2);
+ 521   1      
+ 522   1              while((sp_weight < 22000) || (sp_weight > 65000)){
+ 523   2                      disp_symbol(ERR_SP);
+ 524   2                      menu_func();
+ 525   2              }
+ 526   1              
+ 527   1              //读取传感器量程        
+ 528   1              eeprom_read((u8bit *)&load_cell_span,CELL_SPAN_ADDR,4);
+ 529   1      
+ 530   1              while((load_cell_span != 100000) && (load_cell_span != 150000)
+ 531   1                      && (load_cell_span != 200000) && (load_cell_span != 250000)
+ 532   1                      && (load_cell_span != 300000) && (load_cell_span != 350000)){
+ 533   2                      disp_symbol(ERR_LS);
+ 534   2                      menu_func();
+ 535   2              }
+ 536   1      
+ 537   1              //读取标定输出值
+ 538   1              eeprom_read((u8bit *)&scale_output_val,SCALE_OUTPUT_ADDR,4);
+ 539   1              while((scale_output_val < 19000) || (scale_output_val > 62000)){
+ 540   2                      disp_symbol(E01);
+ 541   2                      menu_func();
+ 542   2              }
+ 543   1      
+ 544   1              //读取标定砝码重量
+ 545   1              eeprom_read((u8bit *)&scale_counterweight_val,COUNTERWEIGHT_ADDR,4);
+ 546   1              while((scale_counterweight_val<20000)||(scale_counterweight_val>60000)){
+ 547   2                      disp_symbol(E02);
+ 548   2                      menu_func();
+ 549   2              }
+ 550   1      
+C51 COMPILER V9.52.0.0   MAIN                                                              01/28/2016 10:05:48 PAGE 10  
+
+ 551   1              //读取追踪袋数          
+ 552   1              eeprom_read(&track_bags,TRACK_BAGS_ADDR,1);
+ 553   1              if ((track_bags == 0) || (track_bags > 10)){
+ 554   2                      track_bags = 5;
+ 555   2                      eeprom_write(&track_bags,TRACK_BAGS_ADDR,1);
+ 556   2              }
+ 557   1              
+ 558   1              //读取皮重值
+ 559   1              eeprom_read((u8bit *)&tare_weight,TW_ADDR,4);
+ 560   1              /*while(tare_weight <= 10000){
+ 561   1                      disp_symbol(E07);
+ 562   1                      menu_func();
+ 563   1              }*/
+ 564   1      
+ 565   1              //读取粗细流切换开关
+ 566   1              eeprom_read(&sf_switch,SF_SWITCH_ADDR,1);
+ 567   1              
+ 568   1              //读取粗细流切换值
+ 569   1              eeprom_read((u8bit *)&sf_weight_adj_val,SF_WEIGHT_ADDR,2);
+ 570   1              while((sf_weight_adj_val < 100) || (sf_weight_adj_val > 10000)){
+ 571   2                      disp_symbol(ERR_HP);
+ 572   2                      menu_func();
+ 573   2              }
+ 574   1      
+ 575   1              //读取落差
+ 576   1              eeprom_read((u8bit *)&drop_weight,DROP_WEIGHT_ADDR,2);
+ 577   1              while((drop_weight < -2500) || (drop_weight > 2500)){
+ 578   2                      disp_symbol(E08);
+ 579   2                      menu_func();
+ 580   2              }
+ 581   1      
+ 582   1              
+ 583   1              //读取净差
+ 584   1              eeprom_read((u8bit *)&residual_weight,R_WEIGHT_ADDR,2);
+ 585   1              while((residual_weight < -2500) || (residual_weight > 2500)){
+ 586   2                      disp_symbol(E09);
+ 587   2                      menu_func();
+ 588   2              }
+ 589   1      
+ 590   1              //袋重修正值
+ 591   1              eeprom_read((u8bit *)&weight_correct_val,WEIGHT_CORRECT_ADDR,2);
+ 592   1              while(weight_correct_val > 1500){
+ 593   2                      disp_symbol(E10);
+ 594   2                      menu_func();
+ 595   2      
+ 596   2              }
+ 597   1      
+ 598   1              //读取抵达时间
+ 599   1              eeprom_read(&arrival_time,ARRIVAL_TIME_ADDR,1);
+ 600   1              //读取开环跟踪开关
+ 601   1              eeprom_read(&ol_track_sw,OL_TRACK_SW_ADDR,1);
+ 602   1              
+ 603   1              //读取闭环校正开关
+ 604   1              eeprom_read(&cl_correct_sw,CL_CORRECT_SW_ADDR,1);
+ 605   1      
+ 606   1              if((ol_track_sw == ON) && (cl_correct_sw == ON)){
+ 607   2                      ol_track_sw = OFF;
+ 608   2                      cl_correct_sw = OFF;
+ 609   2                      disp_symbol(E12);
+ 610   2              }
+ 611   1              //读取计数开关
+ 612   1              eeprom_read(&counter_sw,COUTER_SW_ADDR,1);
+C51 COMPILER V9.52.0.0   MAIN                                                              01/28/2016 10:05:48 PAGE 11  
+
+ 613   1              //初始化关闸板判别值
+ 614   1              shut_fb_w = sp_weight - drop_weight;
+ 615   1          sf_weight = shut_fb_w - sf_weight_adj_val;
+ 616   1              //初始化自追踪队列
+ 617   1              for(cnt = 0;cnt < 10;cnt++)     weight[cnt] = sp_weight + residual_weight;
+ 618   1      }
+ 619          
+ 620          void ClearDropCounter(void)
+ 621          {
+ 622   1          SFRPAGE = 0;
+ 623   1          if(RSTSRC & BIT1)   DropCounter = 0;
+ 624   1          return;
+ 625   1      }
+ 626          /*******************************************************************************
+ 627          *原  型:void mcu_init(void);
+ 628          *形  参:无.
+ 629          *功  能:单片机的初始化函数.
+ 630          *返回值:无.
+ 631          *******************************************************************************/
+ 632          void mcu_init(void)
+ 633          {
+ 634   1          u8bit led_test,cnt;
+ 635   1          stop_wdt();
+ 636   1          sysclk_init();
+ 637   1          ClearDropCounter();
+ 638   1          Port_IO_Init();
+ 639   1          time01_init();
+ 640   1          iic_init();
+ 641   1          adc_init();
+ 642   1          uart0_init(BAUDRATE);
+ 643   1          time3_init();
+ 644   1          time4_init();
+ 645   1          if(get_key(SET_CLOSED) == SET_CLOSED){
+ 646   2              save_all();
+ 647   2          }
+ 648   1          else{
+ 649   2              read_all();
+ 650   2          }
+ 651   1          for(led_test = 0;led_test < 10;led_test ++){
+ 652   2              disp_seg(seg_sym[led_test],0x3f);
+ 653   2              zero_scale_value = 0;
+ 654   2              for(cnt = 0 ;cnt < 20 ;cnt++)   NW_scale();
+ 655   2              //delay_ms(100);
+ 656   2          }
+ 657   1          startup_flag = 1;
+ 658   1      }
+ 659          /*******************************************************************************
+ 660          *原  型:void update_shut_fb_w(u8bit bags);
+ 661          *形  参:  bags    追踪袋数 
+ 662          *功  能:更新关闸板设定值,用于开环追踪功能.
+ 663          *返回值:无.
+ 664          *******************************************************************************/
+ 665          void update_shut_fb_w(u8bit bags)
+ 666          {
+ 667   1          u8bit cnt;
+ 668   1          u32bit xdata sum = 0;
+ 669   1          for(cnt = 0; cnt < bags; cnt++) sum += weight[cnt];
+ 670   1          sum /= bags;
+ 671   1          shut_fb_w = shut_fb_w + (sp_weight + residual_weight - sum)/2;
+ 672   1          sf_weight = shut_fb_w - sf_weight_adj_val;
+ 673   1      }
+ 674          
+C51 COMPILER V9.52.0.0   MAIN                                                              01/28/2016 10:05:48 PAGE 12  
+
+ 675          
+ 676          
+ 677          
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   3183    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =     92      10
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----       9
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =     11    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

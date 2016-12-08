@@ -1,0 +1,1850 @@
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 1   
+
+
+C51 COMPILER V9.52.0.0, COMPILATION OF MODULE MENU_FUNC
+OBJECT MODULE PLACED IN .\debug\menu_func.obj
+COMPILER INVOKED BY: D:\Program Files (x86)\keil\C51\BIN\C51.EXE menu_func.c OPTIMIZE(7,SPEED) BROWSE DEBUG OBJECTEXTEND
+                    - PRINT(.\debug\menu_func.lst) OBJECT(.\debug\menu_func.obj)
+
+line level    source
+
+   1          /*******************************************************************************
+   2          *文件名: menu_func.c
+   3          *作  者: 王文辉
+   4          *单  位: 唐山智能电子有限公司
+   5          *日  期: 2012-9-21
+   6          *版  本: 实验版本
+   7          *功能描述: 2f微机设置菜单相关程序
+   8          *******************************************************************************/
+   9          #include "menu_func.h"
+  10          #include "key_func.h"
+  11          #include "disp.h"
+  12          #include "24c04.h"
+  13          #include "timer.h"
+  14          #include "weighting.h"
+  15          #include "terminal.h"
+  16          extern s16bit xdata drop_weight,residual_weight,zero_scale_value;
+  17          extern u16bit xdata sp_weight,sf_weight,sf_weight_adj_val,weight_correct_val,shut_fb_w;
+  18          extern u8bit xdata err_code,filter_coefficient,filter_coefficient1,sf_switch,ol_track_sw,track_bags;
+  19          extern u8bit xdata track_bags,cl_correct_sw,arrival_time,counter_sw;
+  20          extern u8bit xdata DpSwitch,CommAddr,DpErrFlag;
+  21          extern bit t0_flag,t1_flag;
+  22          extern u32bit xdata load_cell_span,scale_output_val,scale_counterweight_val,tare_weight,DropCounter;
+  23          extern u8bit code seg_sym[40];
+  24          extern u8bit code seg_dot[40];
+  25          bit t1_sta_flag,exit_flag;
+  26          u8bit xdata mr_menu,mf_menu,mc_menu,mt_menu,md_menu;
+  27          extern u8bit xdata      TxBuf[60];
+  28          /*******************************************************************************
+  29          *原  型:void dm_sp_weight(void);
+  30          *形  参:无.
+  31          *功  能:直接修改设定值
+  32          *返回值:无.
+  33          *******************************************************************************/
+  34          void dm_sp_weight(void)
+  35          {
+  36   1              u8bit xdata copy_EIE1,copy_EIE2,copy_IE,key_val;
+  37   1              u16bit xdata backup_sp_weight;
+  38   1              bit ud_key_flag = 0;
+  39   1              t1_sta_flag = 0;
+  40   1              copy_EIE1 = EIE1;
+  41   1              copy_EIE2 = EIE2;
+  42   1              copy_IE = IE;                                                                   //备份中断允许
+  43   1              IE = 0;
+  44   1              IE = 0;
+  45   1              EIE1 = 0;
+  46   1              EIE2 = 0;                                                                               //关所有中断
+  47   1              key_val = get_key(CHK_ALL_KEY);
+  48   1              if(key_val == UP_CLOSED)        ud_key_flag = 1;
+  49   1              else if(key_val == DWN_CLOSED)  ud_key_flag = 1;
+  50   1              else{
+  51   2                      IE = copy_IE;
+  52   2                      IE = copy_IE;
+  53   2                      EIE1 = copy_EIE1;
+  54   2                      EIE2 = copy_EIE2;
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 2   
+
+  55   2                      return;
+  56   2              }
+  57   1              run_disp(sp_weight);
+  58   1              backup_sp_weight = sp_weight;
+  59   1              while(ud_key_flag == 1){
+  60   2                      key_val = get_key(CHK_ALL_KEY);
+  61   2                      if(key_val == UP_CLOSED)        sp_weight += 100;
+  62   2                      else if(key_val == DWN_CLOSED)  sp_weight -= 100;
+  63   2                      else if(key_val == ENT_CLOSED)  ud_key_flag = 0;
+  64   2                      else if(t1_sta_flag == 0){
+  65   3                              t1_100ms(10);
+  66   3                              t1_sta_flag = 1;
+  67   3                      }
+  68   2                      if(t1_flag == 1){
+  69   3                              if(get_key(CHK_ALL_KEY) == NOKEY_CLOSED)        ud_key_flag = 0;
+  70   3                              t1_sta_flag = 0;
+  71   3                              t1_stop();
+  72   3                              t1_flag = 0;
+  73   3                      }
+  74   2                      run_disp(sp_weight);
+  75   2              }
+  76   1              run_disp(sp_weight);
+  77   1              //shut_fb_w = sp_weight - drop_weight;
+  78   1              eeprom_write((u8bit *)&sp_weight,SP_WEIGHT_ADDR,2);
+  79   1              shut_fb_w = shut_fb_w + sp_weight - backup_sp_weight;
+  80   1          sf_weight = shut_fb_w - sf_weight_adj_val;
+  81   1              EIE1 = copy_EIE1;
+  82   1              EIE2 = copy_EIE2;
+  83   1              IE = copy_IE;
+  84   1              IE = copy_IE;
+  85   1              return; 
+  86   1      }
+  87          /*******************************************************************************
+  88          *原  型:void tare_zero_func(void);
+  89          *形  参:无.
+  90          *功  能:去皮清零函数
+  91          *返回值:无.
+  92          *******************************************************************************/
+  93          void tare_zero_func(void)
+  94          {
+  95   1              s32bit xdata nw_val,gw_val,copy_zero_scale_value;
+  96   1              u8bit xdata copy_EIE1,copy_EIE2,copy_IE;
+  97   1              bit t1_sta_flag = 0;
+  98   1              copy_EIE1 = EIE1;
+  99   1              copy_EIE2 = EIE2;
+ 100   1              copy_IE = IE;                                                                   //备份中断允许
+ 101   1              IE = 0;
+ 102   1              IE = 0;
+ 103   1              EIE1 = 0;
+ 104   1              EIE2 = 0;                                                                               //关所有中断
+ 105   1              if(get_key(CLR_CLOSED) == CLR_CLOSED){
+ 106   2                      if(t1_sta_flag == 0){
+ 107   3                              t1_100ms(20);
+ 108   3                              t1_sta_flag = 1;
+ 109   3                      }
+ 110   2                      copy_zero_scale_value = zero_scale_value;
+ 111   2                      zero_scale_value = 0;
+ 112   2                      while((get_key(CLR_RELEASE) != CLR_RELEASE) && (t1_flag != 1)){
+ 113   3                              nw_val = NW_scale();
+ 114   3                              weight_disp(nw_val);
+ 115   3                      }
+ 116   2                      if(t1_flag != 1){                                               //TZP03,执行清零程序
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 3   
+
+ 117   3                              if((nw_val > 2500) || (nw_val < -2500))
+ 118   3                                      zero_scale_value = copy_zero_scale_value;
+ 119   3                              else    zero_scale_value = nw_val;
+ 120   3                              nw_val = NW_scale();
+ 121   3                              weight_disp(nw_val);
+ 122   3                              t1_stop();
+ 123   3                      }
+ 124   2                      else{                                                                   //TZP01,执行去皮程序
+ 125   3                              t1_stop();
+ 126   3                              t1_sta_flag = 0;
+ 127   3                              while((get_key(CLR_RELEASE)!=CLR_RELEASE))
+ 128   3                                      weight_disp(GW_measure());
+ 129   3                              while(get_key(CLR_CLOSED) != CLR_CLOSED){
+ 130   4                                      if(t1_sta_flag == 0){
+ 131   5                                              t1_100ms(20);
+ 132   5                                              t1_sta_flag = 1;
+ 133   5                                      }
+ 134   4                                      if(t1_flag == 1){
+ 135   5                                              zero_scale_value = copy_zero_scale_value;
+ 136   5                                              t1_stop();
+ 137   5                                              EIE1 = copy_EIE1;
+ 138   5                                              EIE2 = copy_EIE2;
+ 139   5                                              IE = copy_IE;
+ 140   5                                              IE = copy_IE;
+ 141   5                                              return;
+ 142   5                                      }
+ 143   4                              }
+ 144   3                              t1_stop();
+ 145   3                              while(get_key(CLR_RELEASE) != CLR_RELEASE) ;
+ 146   3                              while(get_key(ENT_CLOSED) != ENT_CLOSED){
+ 147   4                                      if(t1_sta_flag == 0){
+ 148   5                                              t1_100ms(20);
+ 149   5                                              t1_sta_flag = 1;
+ 150   5                                      }
+ 151   4                                      if(t1_flag == 1){
+ 152   5                                              zero_scale_value = copy_zero_scale_value;
+ 153   5                                              t1_stop();
+ 154   5                                              EIE1 = copy_EIE1;
+ 155   5                                              EIE2 = copy_EIE2;
+ 156   5                                              IE = copy_IE;
+ 157   5                                              IE = copy_IE;
+ 158   5                                              return;
+ 159   5                                      }
+ 160   4                                      gw_val = GW_measure();
+ 161   4                                      flash_disp(gw_val);
+ 162   4                              }
+ 163   3                              t1_stop();
+ 164   3                              while(get_key(ENT_RELEASE) != ENT_RELEASE) ;
+ 165   3                              tare_weight = gw_val;
+ 166   3                              zero_scale_value = 0;
+ 167   3                              eeprom_write((u8bit *)&tare_weight,TW_ADDR,4); 
+ 168   3                      }       
+ 169   2              }
+ 170   1              EIE1 = copy_EIE1;
+ 171   1              EIE2 = copy_EIE2;
+ 172   1              IE = copy_IE;
+ 173   1              IE = copy_IE;
+ 174   1              return;         
+ 175   1      }
+ 176          /*******************************************************************************
+ 177          *原  型:void sp_weight_adj(void);
+ 178          *形  参:无.
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 4   
+
+ 179          *功  能:设定值修改函数
+ 180          *返回值:无.
+ 181          *******************************************************************************/        
+ 182          void sp_weight_adj(void)
+ 183          {
+ 184   1              bit t1_sta_flag = 0,para_change_flag = 0;
+ 185   1              u8bit speed_conter,key_val = 0;
+ 186   1              u16bit xdata backup_sp_weight;
+ 187   1              err_code = 0;
+ 188   1              t1_stop();
+ 189   1              backup_sp_weight = sp_weight;
+ 190   1              weight_disp(sp_weight);
+ 191   1              while(get_key(SET_RELEASE) != SET_RELEASE)      ;
+ 192   1              while((t1_flag != 1) && (key_val != ENT_CLOSED)){
+ 193   2                      if(t1_sta_flag == 0){
+ 194   3                              t1_100ms(200);
+ 195   3                              t1_sta_flag = 1;
+ 196   3                      }
+ 197   2                      key_val = get_key(CHK_ALL_KEY);
+ 198   2                      if(key_val == NOKEY_CLOSED)     speed_conter = 0;
+ 199   2                      if(key_val == UP_CLOSED){
+ 200   3                              t1_stop();
+ 201   3                              t1_sta_flag = 0;
+ 202   3                              if(speed_conter <40) speed_conter++;
+ 203   3                              if(speed_conter < 10)   sp_weight += 1;
+ 204   3                              else if(speed_conter < 20)      sp_weight += 10;
+ 205   3                              else if(speed_conter < 30)      sp_weight += 100;
+ 206   3                              else sp_weight += 500;
+ 207   3                              para_change_flag = 1;                   
+ 208   3                      }
+ 209   2                      else if(key_val == DWN_CLOSED){
+ 210   3                              t1_stop();
+ 211   3                              t1_sta_flag = 0;
+ 212   3                              if(speed_conter <40) speed_conter++;
+ 213   3                              if(speed_conter < 10)   sp_weight -= 1;
+ 214   3                              else if(speed_conter < 20)      sp_weight -= 10;
+ 215   3                              else if(speed_conter < 30)      sp_weight -= 100;
+ 216   3                              else sp_weight -= 500;
+ 217   3                              para_change_flag = 1;   
+ 218   3                      }
+ 219   2                      if(sp_weight > 65000)   sp_weight = 22000;
+ 220   2                      else if(sp_weight < 22000)      sp_weight = 65000;
+ 221   2                      weight_disp(sp_weight);
+ 222   2              }
+ 223   1              t1_stop();
+ 224   1              t1_sta_flag = 0;
+ 225   1              while(get_key(ENT_RELEASE) != ENT_RELEASE)      ;
+ 226   1              if(t1_flag == 1)        sp_weight = backup_sp_weight;   //定时时间到,恢复备份
+ 227   1              else if(para_change_flag == 1){                                         //参数改变,保存参数
+ 228   2                      t1_100ms(200);
+ 229   2                      //shut_fb_w = sp_weight - drop_weight;
+ 230   2                      shut_fb_w = shut_fb_w + sp_weight - backup_sp_weight;
+ 231   2              sf_weight = shut_fb_w - sf_weight_adj_val;
+ 232   2                      while((t1_flag != 1) && (err_code != WR_DONE)){
+ 233   3                              err_code = eeprom_write((u8bit *)&sp_weight,SP_WEIGHT_ADDR,2);
+ 234   3                              if(err_code == E04)     disp_symbol(E04);
+ 235   3                              else if (err_code == E05)       disp_symbol(E05);
+ 236   3                      }
+ 237   2                      if(err_code == WR_DONE){
+ 238   3                              disp_symbol(GOOD);
+ 239   3                              delay_ms(250);
+ 240   3                              delay_ms(250);
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 5   
+
+ 241   3                      }       
+ 242   2              }
+ 243   1      }
+ 244          /*******************************************************************************
+ 245          *原  型:void filter_para_adj(void);
+ 246          *形  参:无.
+ 247          *功  能:滤波系数修改函数
+ 248          *返回值:无.
+ 249          *******************************************************************************/
+ 250          void filter_para_adj(void)
+ 251          {
+ 252   1              bit t1_sta_flag = 0,para_change_flag = 0;
+ 253   1              u8bit backup_para;
+ 254   1              u8bit speed_conter,key_val = 0;
+ 255   1              t1_stop();
+ 256   1              err_code = 0;
+ 257   1              backup_para = filter_coefficient;
+ 258   1              disp_int(filter_coefficient);
+ 259   1              while(get_key(SET_RELEASE) != SET_RELEASE )     ;
+ 260   1              while((t1_flag != 1) && (key_val != ENT_CLOSED)){
+ 261   2                      if(t1_sta_flag == 0){
+ 262   3                              t1_100ms(200);
+ 263   3                              t1_sta_flag = 1;
+ 264   3                      }
+ 265   2                      key_val = get_key(CHK_ALL_KEY);
+ 266   2                      if(key_val == NOKEY_CLOSED)     speed_conter = 0;
+ 267   2                      if(key_val == UP_CLOSED){
+ 268   3                              t1_stop();
+ 269   3                              t1_sta_flag = 0;
+ 270   3                              if(speed_conter <40) speed_conter++;
+ 271   3                              if(speed_conter < 10)   filter_coefficient += 1;
+ 272   3                              else if(speed_conter < 20)      filter_coefficient += 2;
+ 273   3                              else filter_coefficient += 5;
+ 274   3                              para_change_flag = 1;
+ 275   3                      }
+ 276   2                      else if(key_val == DWN_CLOSED){
+ 277   3                              t1_stop();
+ 278   3                              t1_sta_flag = 0;
+ 279   3                              if(speed_conter <40) speed_conter++;
+ 280   3                              if(speed_conter < 10)   filter_coefficient -= 1;
+ 281   3                              else if(speed_conter < 20)      filter_coefficient -= 2;
+ 282   3                              else filter_coefficient -= 5;
+ 283   3                              para_change_flag = 1;   
+ 284   3                      }
+ 285   2                      if(filter_coefficient > 200)    filter_coefficient = 90;
+ 286   2                      else if(filter_coefficient > 90)        filter_coefficient = 0;
+ 287   2                      disp_int(filter_coefficient);
+ 288   2              }
+ 289   1              t1_stop();
+ 290   1              t1_sta_flag = 0;
+ 291   1              while(get_key(ENT_RELEASE) != ENT_RELEASE)      ;
+ 292   1              if(t1_flag == 1)        filter_coefficient = backup_para;
+ 293   1              else if(para_change_flag == 1){ //参数改变,且不是因为定时时间到退出修改参数
+ 294   2                      t1_100ms(200);
+ 295   2                      while((t1_flag != 1) && (err_code != WR_DONE)){
+ 296   3                              filter_coefficient1 = (uchar) filter_coefficient * 1.1;
+ 297   3                              err_code = eeprom_write(&filter_coefficient,FILTER_ADDR,1);
+ 298   3                              if(err_code == E04)     disp_symbol(E04);
+ 299   3                              else if (err_code == E05)       disp_symbol(E05);
+ 300   3                      }
+ 301   2                      if(err_code == WR_DONE){
+ 302   3                              disp_symbol(GOOD);
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 6   
+
+ 303   3                              delay_ms(250);
+ 304   3                              delay_ms(250);
+ 305   3                      }
+ 306   2              }
+ 307   1      }
+ 308          /*******************************************************************************
+ 309          *原  型:void sf_weight_adj(void);
+ 310          *形  参:无.
+ 311          *功  能:粗细流切换值设置函数
+ 312          *返回值:无.
+ 313          *******************************************************************************/
+ 314          void sf_weight_adj(void)                                        //size flow weight
+ 315          {
+ 316   1              bit t1_sta_flag = 0,para_change_flag = 0;
+ 317   1              u8bit speed_conter,key_val = 0;
+ 318   1              u16bit backup_para = sf_weight_adj_val;
+ 319   1              t1_stop();
+ 320   1              err_code = 0;
+ 321   1              weight_disp(sf_weight_adj_val);
+ 322   1              while(get_key(SET_RELEASE) != SET_RELEASE)      ;
+ 323   1              while((t1_flag != 1) && (key_val != ENT_CLOSED)){
+ 324   2                      if(t1_sta_flag == 0){
+ 325   3                              t1_100ms(200);
+ 326   3                              t1_sta_flag = 1;
+ 327   3                      }
+ 328   2                      key_val = get_key(CHK_ALL_KEY);
+ 329   2                      if(key_val == NOKEY_CLOSED)     speed_conter = 0;
+ 330   2                      if(key_val == UP_CLOSED){
+ 331   3                              t1_stop();
+ 332   3                              t1_sta_flag = 0;
+ 333   3                              if(speed_conter <30) speed_conter++;
+ 334   3                              if(speed_conter < 10)   sf_weight_adj_val += 1;
+ 335   3                              else if(speed_conter < 20)      sf_weight_adj_val += 10;
+ 336   3                              else if(speed_conter <= 30)     sf_weight_adj_val += 100;
+ 337   3                              para_change_flag = 1;
+ 338   3                      }
+ 339   2                      else if(key_val == DWN_CLOSED){
+ 340   3                              t1_stop();
+ 341   3                              t1_sta_flag = 0;
+ 342   3                              if(speed_conter <30) speed_conter++;
+ 343   3                              if(speed_conter < 10)   sf_weight_adj_val -= 1;
+ 344   3                              else if(speed_conter < 20)      sf_weight_adj_val -= 10;
+ 345   3                              else if(speed_conter <= 30)     sf_weight_adj_val -= 100;
+ 346   3                              para_change_flag = 1;
+ 347   3                      }
+ 348   2                      if(sf_weight_adj_val > 10000)       sf_weight_adj_val = 100;
+ 349   2                      else if(sf_weight_adj_val < 100)    sf_weight_adj_val = 10000;
+ 350   2                      weight_disp(sf_weight_adj_val);
+ 351   2              }
+ 352   1              t1_stop();
+ 353   1              t1_sta_flag = 0;
+ 354   1              while(get_key(ENT_RELEASE) != ENT_RELEASE);
+ 355   1              if(t1_flag == 1)        sf_weight_adj_val = backup_para;
+ 356   1              else if(para_change_flag == 1){
+ 357   2                      t1_100ms(200);
+ 358   2                      while((t1_flag != 1) && (err_code != WR_DONE)){
+ 359   3                              err_code = eeprom_write((u8bit *)&sf_weight_adj_val,SF_WEIGHT_ADDR,2);
+ 360   3                              if(err_code == E04)     disp_symbol(E04);
+ 361   3                              else if (err_code == E05)       disp_symbol(E05);
+ 362   3                      }
+ 363   2                      if(err_code == WR_DONE){
+ 364   3                              disp_symbol(GOOD);
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 7   
+
+ 365   3                              delay_ms(250);
+ 366   3                              delay_ms(250);
+ 367   3                      }
+ 368   2              sf_weight = shut_fb_w - sf_weight_adj_val;
+ 369   2              }
+ 370   1      }
+ 371          /*******************************************************************************
+ 372          *原  型:void sf_switch_adj(void);
+ 373          *形  参:无.
+ 374          *功  能:粗细流切换开关设置函数
+ 375          *返回值:无.
+ 376          *******************************************************************************/
+ 377          void sf_switch_adj(void)                                        //size flow switch
+ 378          {
+ 379   1              bit t1_sta_flag = 0,para_change_flag = 0;
+ 380   1              u8bit key_val = 0,backup_para = sf_switch;
+ 381   1              err_code = 0;
+ 382   1              t1_stop();
+ 383   1              disp_symbol(sf_switch);
+ 384   1              while(get_key(SET_RELEASE) != SET_RELEASE)      ;
+ 385   1              while((t1_flag != 1) && (key_val != ENT_CLOSED)){
+ 386   2                      if(t1_sta_flag == 0){
+ 387   3                              t1_100ms(200);
+ 388   3                              t1_sta_flag = 1;
+ 389   3                      }
+ 390   2                      key_val = get_key(CHK_ALL_KEY);
+ 391   2                      if(key_val == UP_CLOSED){
+ 392   3                              t1_stop();
+ 393   3                              t1_sta_flag = 0;
+ 394   3                              if((sf_switch == ON) || (sf_switch == OFF))     sf_switch = ~sf_switch;
+ 395   3                              else sf_switch = ON;
+ 396   3                              para_change_flag = 1;                   
+ 397   3                      }
+ 398   2                      else if(key_val == DWN_CLOSED){
+ 399   3                              t1_stop();
+ 400   3                              t1_sta_flag = 0;
+ 401   3                              if((sf_switch == OFF) || (sf_switch == ON))     sf_switch = ~sf_switch;
+ 402   3                              else sf_switch = OFF;
+ 403   3                              para_change_flag = 1;   
+ 404   3                      }
+ 405   2                      disp_symbol(sf_switch);
+ 406   2              }
+ 407   1              t1_stop();
+ 408   1              t1_sta_flag = 0;
+ 409   1              while(get_key(ENT_RELEASE) != ENT_RELEASE)      ;
+ 410   1              if(t1_flag == 1)        sf_switch = backup_para;
+ 411   1              else if(para_change_flag == 1){                         //参数改变
+ 412   2                      t1_100ms(200);
+ 413   2                      while((t1_flag != 1) && (err_code != WR_DONE)){
+ 414   3                              err_code = eeprom_write((u8bit *)&sf_switch,SF_SWITCH_ADDR,1);
+ 415   3                              if(err_code == E04)     disp_symbol(E04);
+ 416   3                              else if (err_code == E05)       disp_symbol(E05);
+ 417   3                      }
+ 418   2                      if(err_code == WR_DONE){
+ 419   3                              disp_symbol(GOOD);
+ 420   3                              delay_ms(250);
+ 421   3                              delay_ms(250);
+ 422   3                      }       
+ 423   2              }
+ 424   1      }
+ 425          /********************************************************************************原  型:void drop_weight_a
+             -dj(void);
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 8   
+
+ 426          *形  参:无.
+ 427          *功  能:落差设置函数
+ 428          *返回值:无.
+ 429          *******************************************************************************/
+ 430          void drop_weight_adj(void)
+ 431          {
+ 432   1              bit t1_sta_flag = 0,para_change_flag = 0;
+ 433   1              u8bit speed_conter,key_val = 0;
+ 434   1              s16bit xdata backup_para = drop_weight;
+ 435   1              err_code = 0;
+ 436   1              t1_stop();
+ 437   1              weight_disp(drop_weight);
+ 438   1              while(get_key(SET_RELEASE) != SET_RELEASE)      ;
+ 439   1              while((t1_flag != 1) && (key_val != ENT_CLOSED)){
+ 440   2                      if(t1_sta_flag == 0){
+ 441   3                              t1_100ms(200);
+ 442   3                              t1_sta_flag = 1;
+ 443   3                      }
+ 444   2                      key_val = get_key(CHK_ALL_KEY);
+ 445   2                      if(key_val == NOKEY_CLOSED)     speed_conter = 0;
+ 446   2                      if(key_val == UP_CLOSED){
+ 447   3                              t1_stop();
+ 448   3                              t1_sta_flag = 0;
+ 449   3                              if(speed_conter <40) speed_conter++;
+ 450   3                              if(speed_conter < 10)   drop_weight += 1;
+ 451   3                              else if(speed_conter < 20)      drop_weight += 10;
+ 452   3                              else    drop_weight += 100;
+ 453   3                              para_change_flag = 1;                   
+ 454   3                      }
+ 455   2                      else if(key_val == DWN_CLOSED){
+ 456   3                              t1_stop();
+ 457   3                              t1_sta_flag = 0;
+ 458   3                              if(speed_conter <40) speed_conter++;
+ 459   3                              if(speed_conter < 10)   drop_weight -= 1;
+ 460   3                              else if(speed_conter < 20)      drop_weight -= 10;
+ 461   3                              else    drop_weight -= 100;
+ 462   3                              para_change_flag = 1;   
+ 463   3                      }
+ 464   2                      if(drop_weight > 2500)  drop_weight = -2500;
+ 465   2                      else if(drop_weight < -2500)    drop_weight = 2500;
+ 466   2                      weight_disp(drop_weight);
+ 467   2              }
+ 468   1              t1_stop();
+ 469   1              t1_sta_flag = 0;
+ 470   1              while(get_key(ENT_RELEASE) != ENT_RELEASE)      ;
+ 471   1              if(t1_flag == 1)        drop_weight = backup_para;              //定时时间到,恢复备份
+ 472   1              else if(para_change_flag == 1){                                         //参数改变,保存参数
+ 473   2                      t1_100ms(200);
+ 474   2                      shut_fb_w = shut_fb_w + drop_weight - backup_para;
+ 475   2              sf_weight = shut_fb_w - sf_weight_adj_val;
+ 476   2                      while((t1_flag != 1) && (err_code != WR_DONE)){
+ 477   3                              err_code = eeprom_write((u8bit *)&drop_weight,DROP_WEIGHT_ADDR,2);
+ 478   3                              if(err_code == E04)     disp_symbol(E04);
+ 479   3                              else if (err_code == E05)       disp_symbol(E05);
+ 480   3                      }
+ 481   2                      if(err_code == WR_DONE){
+ 482   3                              disp_symbol(GOOD);
+ 483   3                              delay_ms(250);
+ 484   3                              delay_ms(250);
+ 485   3                      }       
+ 486   2              }
+ 487   1      }
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 9   
+
+ 488          /********************************************************************************原  型:void ol_track_sw_a
+             -dj(void)
+ 489          *形  参:无.
+ 490          *功  能:开环追踪开关设置函数
+ 491          *返回值:无.
+ 492          *******************************************************************************/
+ 493          void ol_track_sw_adj(void)                                      //open loop track switch
+ 494          {
+ 495   1              bit t1_sta_flag = 0,para_change_flag = 0;
+ 496   1              u8bit key_val = 0,backup_para = ol_track_sw;
+ 497   1              t1_stop();
+ 498   1              err_code = 0;
+ 499   1              disp_symbol(ol_track_sw);
+ 500   1              while(get_key(SET_RELEASE) != SET_RELEASE)      ;
+ 501   1              while((t1_flag != 1) && (key_val != ENT_CLOSED)){
+ 502   2                      if(t1_sta_flag == 0){
+ 503   3                              t1_100ms(200);
+ 504   3                              t1_sta_flag = 1;
+ 505   3                      }
+ 506   2                      key_val = get_key(CHK_ALL_KEY);
+ 507   2                      if(key_val == UP_CLOSED){
+ 508   3                              t1_stop();
+ 509   3                              t1_sta_flag = 0;
+ 510   3                              if((ol_track_sw == ON) || (ol_track_sw == OFF))
+ 511   3                                      ol_track_sw = ~ol_track_sw;
+ 512   3                              else ol_track_sw = ON;
+ 513   3                              para_change_flag = 1;                   
+ 514   3                      }
+ 515   2                      else if(key_val == DWN_CLOSED){
+ 516   3                              t1_stop();
+ 517   3                              t1_sta_flag = 0;
+ 518   3                              if((ol_track_sw == OFF) || (ol_track_sw == ON))
+ 519   3                                      ol_track_sw = ~ol_track_sw;
+ 520   3                              else ol_track_sw = OFF;
+ 521   3                              para_change_flag = 1;   
+ 522   3                      }
+ 523   2                      disp_symbol(ol_track_sw);
+ 524   2              }
+ 525   1              t1_stop();
+ 526   1              t1_sta_flag = 0;
+ 527   1              while(get_key(ENT_RELEASE) != ENT_RELEASE)      ;
+ 528   1              if(t1_flag == 1)        ol_track_sw = backup_para;
+ 529   1              else if(para_change_flag == 1){                         //参数改变
+ 530   2                      t1_100ms(200);
+ 531   2                      while((t1_flag != 1) && (err_code != WR_DONE)){
+ 532   3                              cl_correct_sw = OFF;
+ 533   3                              err_code = eeprom_write((u8bit *)&ol_track_sw,OL_TRACK_SW_ADDR,1);
+ 534   3                              if(err_code == E04)     disp_symbol(E04);
+ 535   3                              else if (err_code == E05)       disp_symbol(E05);
+ 536   3                              else{
+ 537   4                                      err_code = eeprom_write((u8bit *)&cl_correct_sw,CL_CORRECT_SW_ADDR,1);
+ 538   4                                      if(err_code == E04)     disp_symbol(E04);
+ 539   4                                      else if (err_code == E05)       disp_symbol(E05);
+ 540   4                              }
+ 541   3                      }
+ 542   2                      if(err_code == WR_DONE){
+ 543   3                              disp_symbol(GOOD);
+ 544   3                              delay_ms(250);
+ 545   3                              delay_ms(250);
+ 546   3                      }       
+ 547   2              }
+ 548   1      }
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 10  
+
+ 549          /*******************************************************************************
+ 550          *原  型:void track_bags_adj(void)
+ 551          *形  参:无.
+ 552          *功  能:追踪袋数设置函数
+ 553          *返回值:无.
+ 554          *******************************************************************************/
+ 555          void track_bags_adj(void)                               //追踪袋数
+ 556          {
+ 557   1              bit t1_sta_flag = 0,para_change_flag = 0;
+ 558   1              u8bit backup_para = track_bags,key_val = 0;
+ 559   1              t1_stop();
+ 560   1              err_code = 0;
+ 561   1              disp_int(track_bags);
+ 562   1              while(get_key(SET_RELEASE) != SET_RELEASE )     ;
+ 563   1              while((t1_flag != 1) && (key_val != ENT_CLOSED)){
+ 564   2                      if(t1_sta_flag == 0){
+ 565   3                              t1_100ms(200);
+ 566   3                              t1_sta_flag = 1;
+ 567   3                      }
+ 568   2                      key_val = get_key(CHK_ALL_KEY);
+ 569   2                      if(key_val == UP_CLOSED){
+ 570   3                              t1_stop();
+ 571   3                              t1_sta_flag = 0;
+ 572   3                              track_bags += 1;
+ 573   3                              para_change_flag = 1;                   
+ 574   3                      }
+ 575   2                      else if(key_val == DWN_CLOSED){
+ 576   3                              t1_stop();
+ 577   3                              t1_sta_flag = 0;
+ 578   3                              track_bags -= 1;
+ 579   3                              para_change_flag = 1;   
+ 580   3                      }
+ 581   2                      if(track_bags > 200)    track_bags = 10;
+ 582   2                      else if(track_bags > 10)        track_bags = 0;
+ 583   2                      disp_int(track_bags);
+ 584   2              }
+ 585   1              t1_stop();
+ 586   1              t1_sta_flag = 0;
+ 587   1              while(get_key(ENT_RELEASE) != ENT_RELEASE)      ;
+ 588   1              if(t1_flag == 1)        track_bags = backup_para;
+ 589   1              else if(para_change_flag == 1){ //参数改变,且不是因为定时时间到退出修改参数
+ 590   2                      t1_100ms(200);
+ 591   2                      while((t1_flag != 1) && (err_code != WR_DONE)){
+ 592   3                              err_code = eeprom_write(&track_bags,TRACK_BAGS_ADDR,1);
+ 593   3                              if(err_code == E04)     disp_symbol(E04);
+ 594   3                              else if (err_code == E05)       disp_symbol(E05);
+ 595   3                      }
+ 596   2                      if(err_code == WR_DONE){
+ 597   3                              disp_symbol(GOOD);
+ 598   3                              delay_ms(250);
+ 599   3                              delay_ms(250);
+ 600   3                      }       
+ 601   2              }
+ 602   1      }
+ 603          /***********************************************************************************
+ 604          *原  型:void residual_weight_adj(void)
+ 605          *形  参:无.
+ 606          *功  能:净差设置函数
+ 607          *返回值:无.
+ 608          ***********************************************************************************/
+ 609          void residual_weight_adj(void)
+ 610          {
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 11  
+
+ 611   1              bit t1_sta_flag = 0,para_change_flag = 0;
+ 612   1              u8bit speed_conter,key_val = 0;
+ 613   1              s16bit xdata backup_para = residual_weight;
+ 614   1              err_code = 0;
+ 615   1              t1_stop();
+ 616   1              weight_disp(residual_weight);
+ 617   1              while(get_key(SET_RELEASE) != SET_RELEASE)      ;
+ 618   1              while((t1_flag != 1) && (key_val != ENT_CLOSED)){
+ 619   2                      if(t1_sta_flag == 0){
+ 620   3                              t1_100ms(200);
+ 621   3                              t1_sta_flag = 1;
+ 622   3                      }
+ 623   2                      key_val = get_key(CHK_ALL_KEY);
+ 624   2                      if(key_val == NOKEY_CLOSED)     speed_conter = 0;
+ 625   2                      if(key_val == UP_CLOSED){
+ 626   3                              t1_stop();
+ 627   3                              t1_sta_flag = 0;
+ 628   3                              if(speed_conter <40) speed_conter++;
+ 629   3                              if(speed_conter < 10)   residual_weight += 1;
+ 630   3                              else if(speed_conter < 20)      residual_weight += 10;
+ 631   3                              else    residual_weight += 100;
+ 632   3                              para_change_flag = 1;                   
+ 633   3                      }
+ 634   2                      else if(key_val == DWN_CLOSED){
+ 635   3                              t1_stop();
+ 636   3                              t1_sta_flag = 0;
+ 637   3                              if(speed_conter < 40)   speed_conter++;
+ 638   3                              if(speed_conter < 10)   residual_weight -= 1;
+ 639   3                              else if(speed_conter < 20)      residual_weight -= 10;
+ 640   3                              else    residual_weight -= 100;
+ 641   3                              para_change_flag = 1;   
+ 642   3                      }
+ 643   2                      if(residual_weight > 2500)      residual_weight = -2500;
+ 644   2                      else if(residual_weight < -2500)        residual_weight = 2500;
+ 645   2                      weight_disp(residual_weight);
+ 646   2              }
+ 647   1              t1_stop();
+ 648   1              t1_sta_flag = 0;
+ 649   1              while(get_key(ENT_RELEASE) != ENT_RELEASE)      ;
+ 650   1              if(t1_flag == 1)        residual_weight = backup_para;  //定时时间到,恢复备份
+ 651   1              else if(para_change_flag == 1){                                         //参数改变,保存参数
+ 652   2                      t1_100ms(200);
+ 653   2                      while((t1_flag != 1) && (err_code != WR_DONE)){
+ 654   3                              err_code = eeprom_write((u8bit *)&residual_weight,R_WEIGHT_ADDR,2);
+ 655   3                              if(err_code == E04)     disp_symbol(E04);
+ 656   3                              else if (err_code == E05)       disp_symbol(E05);
+ 657   3                      }
+ 658   2                      if(err_code == WR_DONE){
+ 659   3                              disp_symbol(GOOD);
+ 660   3                              delay_ms(250);
+ 661   3                              delay_ms(250);
+ 662   3                      }       
+ 663   2              }
+ 664   1      }
+ 665          /***********************************************************************************
+ 666          *原  型:void cl_correct_sw_adj(void)
+ 667          *形  参:无.
+ 668          *功  能:闭环校正开关设置
+ 669          *返回值:无.
+ 670          ***********************************************************************************/
+ 671          void cl_correct_sw_adj(void)
+ 672          {
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 12  
+
+ 673   1              bit t1_sta_flag = 0,para_change_flag = 0;
+ 674   1              u8bit key_val = 0,backup_para = cl_correct_sw;
+ 675   1              t1_stop();
+ 676   1              err_code = 0;
+ 677   1              disp_symbol(cl_correct_sw);
+ 678   1              while(get_key(SET_RELEASE) != SET_RELEASE)      ;
+ 679   1              while((t1_flag != 1) && (key_val != ENT_CLOSED)){
+ 680   2                      if(t1_sta_flag == 0){
+ 681   3                              t1_100ms(200);
+ 682   3                              t1_sta_flag = 1;
+ 683   3                      }
+ 684   2                      key_val = get_key(CHK_ALL_KEY);
+ 685   2                      if(key_val == UP_CLOSED){
+ 686   3                              t1_stop();
+ 687   3                              t1_sta_flag = 0;
+ 688   3                              if((cl_correct_sw == ON) || (cl_correct_sw == OFF))
+ 689   3                                      cl_correct_sw = ~cl_correct_sw;
+ 690   3                              else cl_correct_sw = ON;
+ 691   3                              para_change_flag = 1;                   
+ 692   3                      }
+ 693   2                      else if(key_val == DWN_CLOSED){
+ 694   3                              t1_stop();
+ 695   3                              t1_sta_flag = 0;
+ 696   3                              if((cl_correct_sw == OFF) || (cl_correct_sw == ON))
+ 697   3                                      cl_correct_sw = ~cl_correct_sw;
+ 698   3                              else cl_correct_sw = OFF;
+ 699   3                              para_change_flag = 1;   
+ 700   3                      }
+ 701   2                      disp_symbol(cl_correct_sw);
+ 702   2              }
+ 703   1              t1_stop();
+ 704   1              t1_sta_flag = 0;
+ 705   1              while(get_key(ENT_RELEASE) != ENT_RELEASE)      ;
+ 706   1              if(t1_flag == 1)        cl_correct_sw = backup_para;
+ 707   1              else if(para_change_flag == 1){                         //参数改变
+ 708   2                      t1_100ms(200);
+ 709   2                      while((t1_flag != 1) && (err_code != WR_DONE)){
+ 710   3                              ol_track_sw = OFF;
+ 711   3                              err_code = eeprom_write((u8bit *)&ol_track_sw,OL_TRACK_SW_ADDR,1);
+ 712   3                              if(err_code == E04)     disp_symbol(E04);
+ 713   3                              else if (err_code == E05)       disp_symbol(E05);
+ 714   3                              else{
+ 715   4                                      err_code = eeprom_write((u8bit *)&cl_correct_sw,CL_CORRECT_SW_ADDR,1);
+ 716   4                                      if(err_code == E04)     disp_symbol(E04);
+ 717   4                                      else if (err_code == E05)       disp_symbol(E05);
+ 718   4                              }
+ 719   3                      }
+ 720   2                      if(err_code == WR_DONE){
+ 721   3                              disp_symbol(GOOD);
+ 722   3                              delay_ms(250);
+ 723   3                              delay_ms(250);
+ 724   3                      }
+ 725   2              }
+ 726   1      }
+ 727          /*******************************************************************************
+ 728          *原  型:void weight_correct_val_adj(void)
+ 729          *形  参:无.
+ 730          *功  能:袋重修正值设置函数.
+ 731          *返回值:无.
+ 732          *******************************************************************************/
+ 733          void weight_correct_val_adj(void)
+ 734          {
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 13  
+
+ 735   1              bit t1_sta_flag = 0,para_change_flag = 0;
+ 736   1              u8bit speed_conter,key_val = 0;
+ 737   1              s16bit xdata backup_para = weight_correct_val;
+ 738   1              err_code = 0;
+ 739   1              t1_stop();
+ 740   1              weight_disp(weight_correct_val);
+ 741   1              while(get_key(SET_RELEASE) != SET_RELEASE)      ;
+ 742   1              while((t1_flag != 1) && (key_val != ENT_CLOSED)){
+ 743   2                      if(t1_sta_flag == 0){
+ 744   3                              t1_100ms(200);
+ 745   3                              t1_sta_flag = 1;
+ 746   3                      }
+ 747   2                      key_val = get_key(CHK_ALL_KEY);
+ 748   2                      if(key_val == NOKEY_CLOSED)     speed_conter = 0;
+ 749   2                      if(key_val == UP_CLOSED){
+ 750   3                              t1_stop();
+ 751   3                              t1_sta_flag = 0;
+ 752   3                              if(speed_conter <40) speed_conter++;
+ 753   3                              if(speed_conter < 10)   weight_correct_val += 1;
+ 754   3                              else if(speed_conter < 20)      weight_correct_val += 10;
+ 755   3                              else    weight_correct_val += 100;
+ 756   3                              para_change_flag = 1;
+ 757   3                      }
+ 758   2                      else if(key_val == DWN_CLOSED){
+ 759   3                              t1_stop();
+ 760   3                              t1_sta_flag = 0;
+ 761   3                              if(speed_conter <40) speed_conter++;
+ 762   3                              if(speed_conter < 10)   weight_correct_val -= 1;
+ 763   3                              else if(speed_conter < 20)      weight_correct_val -= 10;
+ 764   3                              else    weight_correct_val -= 100;
+ 765   3                              para_change_flag = 1;
+ 766   3                      }
+ 767   2                      if(weight_correct_val > 9900)   weight_correct_val = 1500;
+ 768   2                      else if(weight_correct_val > 1500)      weight_correct_val = 0;
+ 769   2                      weight_disp(weight_correct_val);
+ 770   2              }
+ 771   1              t1_stop();
+ 772   1              t1_sta_flag = 0;
+ 773   1              while(get_key(ENT_RELEASE) != ENT_RELEASE)      ;
+ 774   1              if(t1_flag == 1)        weight_correct_val = backup_para;//定时时间到,恢复备份
+ 775   1              else if(para_change_flag == 1){                                         //参数改变,保存参数
+ 776   2                      t1_100ms(200);
+ 777   2                      while((t1_flag != 1) && (err_code != WR_DONE)){
+ 778   3                              err_code=eeprom_write((u8bit *)&weight_correct_val,WEIGHT_CORRECT_ADDR,2);
+ 779   3                              if(err_code == E04)     disp_symbol(E04);
+ 780   3                              else if (err_code == E05)       disp_symbol(E05);
+ 781   3                      }
+ 782   2                      if(err_code == WR_DONE){
+ 783   3                              disp_symbol(GOOD);
+ 784   3                              delay_ms(250);
+ 785   3                              delay_ms(250);
+ 786   3                      }
+ 787   2              }
+ 788   1      }
+ 789          /*******************************************************************************
+ 790          *原  型:void arrival_time_adj(void)
+ 791          *形  参:无.
+ 792          *功  能:抵达时间设置函数.
+ 793          *返回值:无.
+ 794          *******************************************************************************/
+ 795          void arrival_time_adj(void)
+ 796          {
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 14  
+
+ 797   1              bit t1_sta_flag = 0,para_change_flag = 0;
+ 798   1              u8bit speed_conter,key_val = 0;
+ 799   1              u8bit xdata backup_para = arrival_time;
+ 800   1              err_code = 0;
+ 801   1              t1_stop();
+ 802   1              disp_int(arrival_time);
+ 803   1              while(get_key(SET_RELEASE) != SET_RELEASE)      ;
+ 804   1              while((t1_flag != 1) && (key_val != ENT_CLOSED)){
+ 805   2                      if(t1_sta_flag == 0){
+ 806   3                              t1_100ms(200);
+ 807   3                              t1_sta_flag = 1;
+ 808   3                      }
+ 809   2                      key_val = get_key(CHK_ALL_KEY);
+ 810   2                      if(key_val == NOKEY_CLOSED)     speed_conter = 0;
+ 811   2                      if(key_val == UP_CLOSED){
+ 812   3                              t1_stop();
+ 813   3                              t1_sta_flag = 0;
+ 814   3                              if(speed_conter <40) speed_conter++;
+ 815   3                              if(speed_conter < 10)   arrival_time += 1;
+ 816   3                              else if(speed_conter < 20)      arrival_time += 2;
+ 817   3                              else    arrival_time += 4;
+ 818   3                              para_change_flag = 1;                   
+ 819   3                      }
+ 820   2                      else if(key_val == DWN_CLOSED){
+ 821   3                              t1_stop();
+ 822   3                              t1_sta_flag = 0;
+ 823   3                              if(speed_conter <40) speed_conter++;
+ 824   3                              if(speed_conter < 10)   arrival_time -= 1;
+ 825   3                              else if(speed_conter < 20)      arrival_time -= 2;
+ 826   3                              else    arrival_time -= 4;
+ 827   3                              para_change_flag = 1;   
+ 828   3                      }
+ 829   2                      disp_int(arrival_time);
+ 830   2              }
+ 831   1              t1_stop();
+ 832   1              t1_sta_flag = 0;
+ 833   1              while(get_key(ENT_RELEASE) != ENT_RELEASE)      ;
+ 834   1              if(t1_flag == 1)        arrival_time = backup_para;             //定时时间到,恢复备份
+ 835   1              else if(para_change_flag == 1){                                         //参数改变,保存参数
+ 836   2                      t1_100ms(200);
+ 837   2                      while((t1_flag != 1) && (err_code != WR_DONE)){
+ 838   3                              err_code = eeprom_write((u8bit *)&arrival_time,ARRIVAL_TIME_ADDR,1);
+ 839   3                              if(err_code == E04)     disp_symbol(E04);
+ 840   3                              else if (err_code == E05)       disp_symbol(E05);
+ 841   3                      }
+ 842   2                      if(err_code == WR_DONE){
+ 843   3                              disp_symbol(GOOD);
+ 844   3                              delay_ms(250);
+ 845   3                              delay_ms(250);
+ 846   3                      }       
+ 847   2              }
+ 848   1      }
+ 849          /*******************************************************************************
+ 850          *原  型:void couter_sw_adj(void)
+ 851          *形  参:无.
+ 852          *功  能:技术开关设置函数.
+ 853          *返回值:无.
+ 854          *******************************************************************************/
+ 855          void couter_sw_adj(void)
+ 856          {
+ 857   1              bit t1_sta_flag = 0,para_change_flag = 0;
+ 858   1              u8bit key_val = 0,backup_para = counter_sw;
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 15  
+
+ 859   1              err_code = 0;
+ 860   1              t1_stop();
+ 861   1              disp_symbol(counter_sw);
+ 862   1              while(get_key(SET_RELEASE) != SET_RELEASE)      ;
+ 863   1              while((t1_flag != 1) && (key_val != ENT_CLOSED)){
+ 864   2                      if(t1_sta_flag == 0){
+ 865   3                              t1_100ms(200);
+ 866   3                              t1_sta_flag = 1;
+ 867   3                      }
+ 868   2                      key_val = get_key(CHK_ALL_KEY);
+ 869   2                      if(key_val == UP_CLOSED){
+ 870   3                              t1_stop();
+ 871   3                              t1_sta_flag = 0;
+ 872   3                              if((counter_sw == ON)||(counter_sw == OFF))counter_sw=~counter_sw;
+ 873   3                              else counter_sw = ON;
+ 874   3                              para_change_flag = 1;
+ 875   3                      }
+ 876   2                      else if(key_val == DWN_CLOSED){
+ 877   3                              t1_stop();
+ 878   3                              t1_sta_flag = 0;
+ 879   3                              if((counter_sw == OFF)||(counter_sw == ON))counter_sw=~counter_sw;
+ 880   3                              else counter_sw = OFF;
+ 881   3                              para_change_flag = 1;
+ 882   3                      }
+ 883   2                      disp_symbol(counter_sw);
+ 884   2              }
+ 885   1              t1_stop();
+ 886   1              t1_sta_flag = 0;
+ 887   1              while(get_key(ENT_RELEASE) != ENT_RELEASE)      ;
+ 888   1              if(t1_flag == 1)        counter_sw = backup_para;
+ 889   1              else if(para_change_flag == 1){                         //参数改变
+ 890   2                      t1_100ms(200);
+ 891   2              DropCounter = 0;
+ 892   2                      while((t1_flag != 1) && (err_code != WR_DONE)){
+ 893   3                              err_code = eeprom_write((u8bit *)&counter_sw,COUTER_SW_ADDR,1);
+ 894   3                              if(err_code == E04)     disp_symbol(E04);
+ 895   3                              else if(err_code == E05) disp_symbol(E05);
+ 896   3                      }
+ 897   2                      if(err_code == WR_DONE){
+ 898   3                              disp_symbol(GOOD);
+ 899   3                              delay_ms(250);
+ 900   3                              delay_ms(250);
+ 901   3                      }       
+ 902   2              }
+ 903   1      }
+ 904          
+ 905          /*******************************************************************************
+ 906          *原  型:void func_func(void)
+ 907          *形  参:无.
+ 908          *功  能:参数设置函数.
+ 909          *返回值:无.
+ 910          *******************************************************************************/
+ 911          void func_func(void)
+ 912          {
+ 913   1              u8bit xdata key_val;
+ 914   1              if(t1_sta_flag == 0){
+ 915   2                      t1_100ms(200);
+ 916   2                      t1_sta_flag = 1;
+ 917   2              }
+ 918   1              disp_symbol(mf_menu);
+ 919   1              key_val = get_key(CHK_ALL_KEY);
+ 920   1              if(key_val != NOKEY_CLOSED){
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 16  
+
+ 921   2                      t1_stop();
+ 922   2                      t1_sta_flag = 0;
+ 923   2              }
+ 924   1              if(key_val == ENT_CLOSED)       exit_flag = 1;
+ 925   1              else{   
+ 926   2                      switch(mf_menu){
+ 927   3                              case MF01:
+ 928   3                                      if(key_val == SET_CLOSED)       sp_weight_adj();
+ 929   3                                      else if(key_val == DWN_CLOSED)  mf_menu = MF02;
+ 930   3                                      else if(key_val == UP_CLOSED)   mf_menu = MF12;
+ 931   3                                      break;
+ 932   3                              case MF02:
+ 933   3                                      if(key_val == SET_CLOSED)       filter_para_adj();
+ 934   3                                      else if(key_val == DWN_CLOSED)  mf_menu = MF03;
+ 935   3                                      else if(key_val == UP_CLOSED)   mf_menu = MF01;
+ 936   3                                      break;
+ 937   3                              case MF03:
+ 938   3                                      if(key_val==SET_CLOSED) sf_weight_adj();//size flow粗细流切换
+ 939   3                                      else if(key_val == DWN_CLOSED)  mf_menu = MF04;
+ 940   3                                      else if(key_val == UP_CLOSED)   mf_menu = MF02;
+ 941   3                                      break;
+ 942   3                              case MF04:
+ 943   3                                      if(key_val == SET_CLOSED)       sf_switch_adj();
+ 944   3                                      else if(key_val == DWN_CLOSED)  mf_menu = MF05;
+ 945   3                                      else if(key_val == UP_CLOSED)   mf_menu = MF03;
+ 946   3                                      break;
+ 947   3                              case MF05:
+ 948   3                                      if(key_val == SET_CLOSED)       drop_weight_adj();
+ 949   3                                      else if(key_val == DWN_CLOSED)  mf_menu = MF06;
+ 950   3                                      else if(key_val == UP_CLOSED)   mf_menu = MF04;
+ 951   3                                      break;
+ 952   3                              case MF06:
+ 953   3                                      if(key_val == SET_CLOSED)       ol_track_sw_adj();//open loop track
+ 954   3                                      else if(key_val == DWN_CLOSED)  mf_menu = MF07;
+ 955   3                                      else if(key_val == UP_CLOSED)   mf_menu = MF05;
+ 956   3                                      break;
+ 957   3                              case MF07:
+ 958   3                                      if(key_val == SET_CLOSED)       track_bags_adj();       //
+ 959   3                                      else if(key_val == DWN_CLOSED)  mf_menu = MF08;
+ 960   3                                      else if(key_val == UP_CLOSED)   mf_menu = MF06;
+ 961   3                                      break;
+ 962   3                              case MF08:
+ 963   3                                      if(key_val == SET_CLOSED)       residual_weight_adj();//袋重净差设置
+ 964   3                                      else if(key_val == DWN_CLOSED)  mf_menu = MF09;
+ 965   3                                      else if(key_val == UP_CLOSED)   mf_menu = MF07;
+ 966   3                                      break;
+ 967   3                              case MF09:
+ 968   3                                      if(key_val == SET_CLOSED)       cl_correct_sw_adj();//
+ 969   3                                      else if(key_val == DWN_CLOSED)  mf_menu = MF10;
+ 970   3                                      else if(key_val == UP_CLOSED)   mf_menu = MF08;
+ 971   3                                      break;
+ 972   3                              case MF10:
+ 973   3                                      if(key_val == SET_CLOSED)       weight_correct_val_adj();
+ 974   3                                      else if(key_val == DWN_CLOSED)  mf_menu = MF11;
+ 975   3                                      else if(key_val == UP_CLOSED)   mf_menu = MF09;
+ 976   3                                      break;
+ 977   3                              case MF11:
+ 978   3                                      if(key_val == SET_CLOSED)       arrival_time_adj();
+ 979   3                                      else if(key_val == DWN_CLOSED)  mf_menu = MF12;
+ 980   3                                      else if(key_val == UP_CLOSED)   mf_menu = MF10;
+ 981   3                                      break;
+ 982   3                              case MF12:
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 17  
+
+ 983   3                                      if(key_val == SET_CLOSED)       couter_sw_adj();
+ 984   3                                      else if(key_val == DWN_CLOSED)  mf_menu = MF01;
+ 985   3                                      else if(key_val == UP_CLOSED)   mf_menu = MF11;
+ 986   3                                      break;
+ 987   3                      }
+ 988   2                      exit_flag = 0;
+ 989   2              }
+ 990   1      }
+ 991          /*******************************************************************************
+ 992          *原  型:void span_set(void)
+ 993          *形  参:无.
+ 994          *功  能:量程设置.
+ 995          *返回值:无.
+ 996          *******************************************************************************/
+ 997          void span_set(void)
+ 998          {
+ 999   1              bit t1_sta_flag = 0,para_change_flag = 0;
+1000   1              u8bit key_val = 0;
+1001   1              u32bit xdata backup_para = load_cell_span;
+1002   1              err_code = 0;
+1003   1              t1_stop();
+1004   1              weight_disp(load_cell_span);
+1005   1              while(get_key(SET_RELEASE) != SET_RELEASE);
+1006   1              while((t1_flag != 1) && (key_val != ENT_CLOSED)){
+1007   2                      if(t1_sta_flag == 0){
+1008   3                              t1_100ms(200);
+1009   3                              t1_sta_flag = 1;
+1010   3                      }
+1011   2                      key_val = get_key(CHK_ALL_KEY);
+1012   2                      if(key_val == UP_CLOSED){
+1013   3                              t1_stop();
+1014   3                              t1_sta_flag = 0;
+1015   3                              if(load_cell_span == 100000)            load_cell_span = 350000;
+1016   3                              else if(load_cell_span == 150000)       load_cell_span = 100000;
+1017   3                              else if(load_cell_span == 200000)       load_cell_span = 150000;
+1018   3                              else if(load_cell_span == 250000)       load_cell_span = 200000;
+1019   3                              else if(load_cell_span == 300000)       load_cell_span = 250000;
+1020   3                              else if(load_cell_span == 350000)       load_cell_span = 300000;
+1021   3                              else    load_cell_span = 100000;
+1022   3                              para_change_flag = 1;
+1023   3                      }
+1024   2                      else if(key_val == DWN_CLOSED){
+1025   3                              t1_stop();
+1026   3                              t1_sta_flag = 0;
+1027   3                              t1_sta_flag = 0;
+1028   3                              if(load_cell_span == 100000)            load_cell_span = 150000;
+1029   3                              else if(load_cell_span == 150000)       load_cell_span = 200000;
+1030   3                              else if(load_cell_span == 200000)       load_cell_span = 250000;
+1031   3                              else if(load_cell_span == 250000)       load_cell_span = 300000;
+1032   3                              else if(load_cell_span == 300000)       load_cell_span = 350000;
+1033   3                              else if(load_cell_span == 350000)       load_cell_span = 100000;
+1034   3                              else    load_cell_span = 350000;
+1035   3                              para_change_flag = 1;   
+1036   3                      }
+1037   2                      weight_disp(load_cell_span);
+1038   2              }
+1039   1              t1_stop();
+1040   1              t1_sta_flag = 0;
+1041   1              while(get_key(ENT_RELEASE) != ENT_RELEASE)      ;
+1042   1              if(t1_flag == 1)        load_cell_span = backup_para;   //定时时间到,恢复备份
+1043   1              else if(para_change_flag == 1){                                         //参数改变,保存参数
+1044   2                      t1_100ms(200);
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 18  
+
+1045   2                      while((t1_flag != 1) && (err_code != WR_DONE)){
+1046   3                              err_code = eeprom_write((u8bit *)&load_cell_span,CELL_SPAN_ADDR,4);
+1047   3                              if(err_code == E04)     disp_symbol(E04);
+1048   3                              else if (err_code == E05)       disp_symbol(E05);
+1049   3                      }
+1050   2                      if(err_code == WR_DONE){
+1051   3                              disp_symbol(GOOD);
+1052   3                              delay_ms(250);
+1053   3                              delay_ms(250);
+1054   3                      }       
+1055   2              }
+1056   1      }
+1057          /***********************************************************************************
+1058          *原  型:void tare(void)
+1059          *形  参:无.
+1060          *功  能:去皮函数.
+1061          *返回值:无.
+1062          ***********************************************************************************/
+1063          void tare(void)
+1064          {
+1065   1              s32bit xdata copy_zero_scale_value = zero_scale_value,copy_tw = tare_weight;
+1066   1              bit para_change_flag = 0;
+1067   1              t1_stop();
+1068   1              zero_scale_value = 0;
+1069   1              while(get_key(SET_RELEASE) != SET_RELEASE)      weight_disp(GW_measure());
+1070   1              t1_100ms(200);
+1071   1              while((t1_flag != 1) && (get_key(CLR_CLOSED) != CLR_CLOSED))    ;
+1072   1              if(t1_flag != 1){
+1073   2                      t1_100ms(200);
+1074   2                      while((t1_flag != 1) && (get_key(CLR_RELEASE) != CLR_RELEASE))  ;
+1075   2                      if(t1_flag != 1){
+1076   3                              t1_stop();
+1077   3                              tare_weight = GW_measure();
+1078   3                              t1_100ms(200);
+1079   3                              while((get_key(ENT_CLOSED)!=ENT_CLOSED)&&(t1_flag!=1))
+1080   3                                      flash_disp(NW_scale());
+1081   3                      }
+1082   2              }
+1083   1              if(t1_flag == 1){
+1084   2                      tare_weight = copy_tw;
+1085   2                      zero_scale_value = copy_zero_scale_value;
+1086   2              }
+1087   1              else{
+1088   2                      while(get_key(ENT_RELEASE) != ENT_RELEASE)      ;
+1089   2                      weight_disp(NW_scale());
+1090   2                      delay_ms(100);
+1091   2                      t1_100ms(200);
+1092   2                      while((t1_flag != 1) && (err_code != WR_DONE)){
+1093   3                              err_code = eeprom_write((u8bit *)&tare_weight,TW_ADDR,4); 
+1094   3                              if(err_code == E04)     disp_symbol(E04);
+1095   3                              else if (err_code == E05)       disp_symbol(E05);
+1096   3                      }
+1097   2                      if(err_code == WR_DONE){
+1098   3                              disp_symbol(GOOD);
+1099   3                              delay_ms(250);
+1100   3                              delay_ms(250);
+1101   3                      }
+1102   2              }
+1103   1              return;
+1104   1      }
+1105          /*******************************************************************************
+1106          *原  型:void gain(void)
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 19  
+
+1107          *形  参:无.
+1108          *功  能:标定函数.
+1109          *返回值:无.
+1110          *******************************************************************************/
+1111          void gain(void)
+1112          {
+1113   1              bit para_change_flag;
+1114   1              u8bit xdata cnt,speed_conter,key_val = 0;
+1115   1              u32bit xdata nw_val,backup_output = scale_output_val;
+1116   1              u32bit xdata backup_counter = scale_counterweight_val;
+1117   1              t1_stop();
+1118   1              t1_flag = 0;
+1119   1              err_code = 0XFF;
+1120   1              for(cnt = 0;cnt < 19; cnt++)    NW_measure();
+1121   1              while(get_key(SET_RELEASE) != SET_RELEASE)      ;
+1122   1              while(get_key(SET_CLOSED) != SET_CLOSED){
+1123   2                      while(err_code != 0){
+1124   3                              nw_val = NW_measure();
+1125   3                              if(nw_val < 19000){                                             //砝码重量超下限
+1126   4                                      disp_symbol(ERR_CL);
+1127   4                                      err_code = ERR_CL;
+1128   4                                      while(get_key(SET_CLOSED) != SET_CLOSED);
+1129   4                              }
+1130   3                              else if(nw_val > 62000){                                //砝码重量超上限
+1131   4                                      disp_symbol(ERR_HL);
+1132   4                                      err_code = ERR_HL;
+1133   4                                      while(get_key(SET_CLOSED) != SET_CLOSED);
+1134   4                              }
+1135   3                              else err_code = 0;
+1136   3                              if(err_code)
+1137   3                                      while(get_key(SET_RELEASE) != SET_RELEASE);     
+1138   3                      }
+1139   2                      weight_disp(nw_val);
+1140   2                      err_code = 0XFF;        
+1141   2              }
+1142   1              scale_output_val = nw_val;
+1143   1              scale_counterweight_val = scale_output_val;
+1144   1              weight_disp(scale_counterweight_val);
+1145   1              while(get_key(SET_RELEASE) != SET_RELEASE);
+1146   1              err_code = 0;
+1147   1              while((t1_flag != 1) && (key_val != ENT_CLOSED)){       //参数设置
+1148   2                      if(t1_sta_flag == 0){                                           //定时器未启动,则启动3S定时
+1149   3                              t1_100ms(200);
+1150   3                              t1_sta_flag = 1;
+1151   3                      }
+1152   2                      key_val = get_key(CHK_ALL_KEY);
+1153   2                      if(key_val == NOKEY_CLOSED)     speed_conter = 0;
+1154   2                      if(key_val == UP_CLOSED){                                       //参数加调整
+1155   3                              t1_stop();
+1156   3                              t1_sta_flag = 0;
+1157   3                              if(speed_conter <40) speed_conter++;
+1158   3                              if(speed_conter < 10)   scale_counterweight_val += 1;
+1159   3                              else if(speed_conter < 20)      scale_counterweight_val += 10;
+1160   3                              else if(speed_conter < 30)      scale_counterweight_val += 100;
+1161   3                              else scale_counterweight_val += 500;
+1162   3                              para_change_flag = 1;                   
+1163   3                      }
+1164   2                      else if(key_val == DWN_CLOSED){                         //参数检调整
+1165   3                              t1_stop();
+1166   3                              t1_sta_flag = 0;
+1167   3                              if(speed_conter <40) speed_conter++;
+1168   3                              if(speed_conter < 10)   scale_counterweight_val -= 1;
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 20  
+
+1169   3                              else if(speed_conter < 20)      scale_counterweight_val -= 10;
+1170   3                              else if(speed_conter < 30)      scale_counterweight_val -= 100;
+1171   3                              else scale_counterweight_val -= 500;
+1172   3                              para_change_flag = 1;   
+1173   3                      }
+1174   2                      if(scale_counterweight_val > 60000)     scale_counterweight_val = 20000;                
+1175   2                      //参数超范围调整
+1176   2                      else if(scale_counterweight_val<20000) scale_counterweight_val = 60000;
+1177   2                      weight_disp(scale_counterweight_val);
+1178   2              }
+1179   1              t1_stop();
+1180   1              t1_sta_flag = 0;
+1181   1              while(get_key(ENT_RELEASE) != ENT_RELEASE)      ;
+1182   1              if(t1_flag == 1){                                                       //超过3秒没有按键,参数恢复备份值
+1183   2                      scale_counterweight_val = backup_counter;
+1184   2                      scale_output_val = backup_output;
+1185   2              }
+1186   1              else if(para_change_flag == 1){                         //参数存贮
+1187   2                      t1_100ms(200);
+1188   2                      while((t1_flag != 1) && (err_code != WR_DONE)){
+1189   3                              err_code = eeprom_write((u8bit *)&scale_counterweight_val,COUNTERWEIGHT_ADDR,4);
+1190   3                              if(err_code != WR_DONE) disp_symbol(err_code);
+1191   3                              else{
+1192   4                                      err_code = eeprom_write((u8bit *)&scale_output_val,SCALE_OUTPUT_ADDR,4);
+1193   4                                      if(err_code != WR_DONE) disp_symbol(err_code);
+1194   4                              }
+1195   3                      }
+1196   2                      if(err_code == WR_DONE){                                        //存储完成,显示good
+1197   3                              disp_symbol(GOOD);
+1198   3                              delay_ms(250);
+1199   3                              delay_ms(250);
+1200   3                      }
+1201   2              }
+1202   1      }
+1203          /***********************************************************************************
+1204          *原  型:void cal_func(void)
+1205          *形  参:无.
+1206          *功  能:标定相关函数.
+1207          *返回值:无.
+1208          ***********************************************************************************/
+1209          void cal_func(void)
+1210          {
+1211   1              u8bit xdata key_val;
+1212   1              if(t1_sta_flag == 0){
+1213   2                      t1_100ms(200);
+1214   2                      t1_sta_flag = 1;
+1215   2              }
+1216   1              disp_symbol(mc_menu);                                                   //cal 菜单
+1217   1              key_val = get_key(CHK_ALL_KEY);
+1218   1              if(key_val != NOKEY_CLOSED){
+1219   2                      t1_stop();
+1220   2                      t1_sta_flag = 0;
+1221   2              }
+1222   1              if(key_val == ENT_CLOSED)       exit_flag = 1;
+1223   1              else{           
+1224   2                      switch(mc_menu){
+1225   3                              case MC01:
+1226   3                                      if(key_val == SET_CLOSED)       span_set();
+1227   3                                      else if(key_val == DWN_CLOSED)  mc_menu = MC02;
+1228   3                                      else if(key_val == UP_CLOSED)   mc_menu = MC03;
+1229   3                                      break;
+1230   3                              case MC02:
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 21  
+
+1231   3                                      if(key_val == SET_CLOSED)       tare();
+1232   3                                      else if(key_val == DWN_CLOSED)  mc_menu = MC03;
+1233   3                                      else if(key_val == UP_CLOSED)   mc_menu = MC01;
+1234   3                                      break;
+1235   3                              case MC03:
+1236   3                                      if(key_val == SET_CLOSED)       gain();         //size flow 粗细流切换
+1237   3                                      else if(key_val == DWN_CLOSED)  mc_menu = MC01;
+1238   3                                      else if(key_val == UP_CLOSED)   mc_menu = MC02;
+1239   3                                      break;
+1240   3                      }
+1241   2                      exit_flag = 0;
+1242   2              }
+1243   1      }
+1244          /*******************************************************************************
+1245          *原  型:void input_test(void)
+1246          *形  参:无.
+1247          *功  能:输入测试函数
+1248          *返回值:无.
+1249          *******************************************************************************/
+1250          void input_test(void)
+1251          {
+1252   1              t1_stop();
+1253   1              while(get_key(SET_RELEASE) != SET_RELEASE);
+1254   1              disp_symbol(CLR_ALL);
+1255   1              while(get_key(ENT_CLOSED) != ENT_CLOSED)        disp_symbol(get_input());               
+1256   1      }
+1257          /*******************************************************************************
+1258          *原  型:void output_test(void)
+1259          *形  参:无.
+1260          *功  能:输出测试函数
+1261          *返回值:无.
+1262          *******************************************************************************/
+1263          void output_test(void)
+1264          {
+1265   1              while(get_key(SET_RELEASE) != SET_RELEASE);
+1266   1              mt_menu = DQ02;
+1267   1      }
+1268          
+1269          void flashboard_test(void)
+1270          {
+1271   1              u8bit key_val = 0;
+1272   1              P3 |= 0X3E;                                     //所有的输出端口置1;
+1273   1              while(get_key(SET_RELEASE) != SET_RELEASE);
+1274   1              while(key_val != ENT_CLOSED){
+1275   2                      key_val = get_key(CHK_ALL_KEY);
+1276   2                      if((key_val == UP_CLOSED) || (key_val == DWN_CLOSED)){
+1277   3                              while(get_key(UD_RELEASE) != UD_RELEASE);       
+1278   3                              cyl_sw_out = !cyl_sw_out;
+1279   3                      }
+1280   2                      if(cyl_sw_out == SHUT)  disp_symbol(O1_OFF);
+1281   2                      else disp_symbol(O1_ON);
+1282   2              }
+1283   1              while(get_key(ENT_RELEASE) != ENT_RELEASE);
+1284   1              cyl_sw_out = SHUT;
+1285   1      }
+1286          
+1287          void size_flow_test(void)
+1288          {
+1289   1              u8bit key_val = 0;
+1290   1              P3 |= 0X3E;                                     //所有的输出端口置1;
+1291   1              while(get_key(SET_RELEASE) != SET_RELEASE)      ;
+1292   1              while(key_val != ENT_CLOSED){
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 22  
+
+1293   2                      key_val = get_key(CHK_ALL_KEY);
+1294   2                      if((key_val == UP_CLOSED) || (key_val == DWN_CLOSED)){
+1295   3                              while(get_key(UD_RELEASE) != UD_RELEASE)        ;       
+1296   3                              fine_flow_out = !fine_flow_out;
+1297   3                      }
+1298   2                      if(fine_flow_out == COARSE)     disp_symbol(O2_OFF);
+1299   2                      else disp_symbol(O2_ON);
+1300   2              }
+1301   1              while(get_key(ENT_RELEASE) != ENT_RELEASE);
+1302   1              fine_flow_out = COARSE;
+1303   1      }
+1304          
+1305          void discharge_bag_test(void)
+1306          {
+1307   1              u8bit key_val = 0;
+1308   1              P3 |= 0X3E;                                     //所有的输出端口置1;
+1309   1              while(get_key(SET_RELEASE) != SET_RELEASE)      ;
+1310   1              while(key_val != ENT_CLOSED){
+1311   2                      key_val = get_key(CHK_ALL_KEY);
+1312   2                      if((key_val == UP_CLOSED) || (key_val == DWN_CLOSED)){
+1313   3                              while(get_key(UD_RELEASE) != UD_RELEASE)        ;       
+1314   3                              discharge_bag_sw_out = !discharge_bag_sw_out;
+1315   3                      }
+1316   2                      if(discharge_bag_sw_out == SHUT)        disp_symbol(O3_OFF);
+1317   2                      else disp_symbol(O3_ON);
+1318   2              }
+1319   1              while(get_key(ENT_RELEASE) != ENT_RELEASE);
+1320   1              discharge_bag_sw_out = SHUT;
+1321   1      }
+1322          
+1323          void clamp_bag_test(void)
+1324          {
+1325   1              u8bit key_val = 0;
+1326   1              P3 |= 0X3E;                                     //所有的输出端口置1;
+1327   1              while(get_key(SET_RELEASE) != SET_RELEASE)      ;
+1328   1              while(key_val != ENT_CLOSED){
+1329   2                      key_val = get_key(CHK_ALL_KEY);
+1330   2                      if((key_val == UP_CLOSED) || (key_val == DWN_CLOSED)){
+1331   3                              while(get_key(UD_RELEASE) != UD_RELEASE)        ;       
+1332   3                              flashboard_sw_out = !flashboard_sw_out;
+1333   3                      }
+1334   2                      if(flashboard_sw_out == SHUT)   disp_symbol(O4_OFF);
+1335   2                      else disp_symbol(O4_ON);
+1336   2              }
+1337   1              while(get_key(ENT_RELEASE) != ENT_RELEASE);
+1338   1              flashboard_sw_out = SHUT;
+1339   1      }
+1340          
+1341          void fill_mot_sw_test(void)
+1342          {
+1343   1              u8bit key_val = 0;
+1344   1              P3 |= 0X3E;                                     //所有的输出端口置1;
+1345   1              while(get_key(SET_RELEASE) != SET_RELEASE)      ;
+1346   1              while(key_val != ENT_CLOSED){
+1347   2                      key_val = get_key(CHK_ALL_KEY);
+1348   2                      if((key_val == UP_CLOSED) || (key_val == DWN_CLOSED)){
+1349   3                              while(get_key(UD_RELEASE) != UD_RELEASE)        ;       
+1350   3                              fill_mot_sw_out = !fill_mot_sw_out;
+1351   3                      }
+1352   2                      if(fill_mot_sw_out == SHUT)     disp_symbol(O5_OFF);
+1353   2                      else disp_symbol(O5_ON);
+1354   2              }
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 23  
+
+1355   1              while(get_key(ENT_RELEASE) != ENT_RELEASE);
+1356   1              fill_mot_sw_out = SHUT;
+1357   1      }
+1358          
+1359          void test_func(void)
+1360          {
+1361   1              u8bit xdata key_val;
+1362   1              if(t1_sta_flag == 0){
+1363   2                      t1_100ms(200);
+1364   2                      t1_sta_flag = 1;
+1365   2              }
+1366   1              disp_symbol(mt_menu);                   
+1367   1              key_val = get_key(CHK_ALL_KEY);
+1368   1              if(key_val != NOKEY_CLOSED){
+1369   2                      t1_stop();
+1370   2                      t1_sta_flag = 0;
+1371   2              }               
+1372   1              switch(mt_menu){
+1373   2                      case DI01:
+1374   2                              if(key_val == SET_CLOSED)       input_test();
+1375   2                              else if(key_val == DWN_CLOSED)  mt_menu = DQ01;
+1376   2                              else if(key_val == UP_CLOSED)   mt_menu = DQ01;
+1377   2                              else if(key_val == ENT_CLOSED)  exit_flag = 1;
+1378   2                              break;
+1379   2                      case DQ01:
+1380   2                              if(key_val == SET_CLOSED)       output_test();
+1381   2                              else if(key_val == DWN_CLOSED)  mt_menu = DI01;
+1382   2                              else if(key_val == UP_CLOSED)   mt_menu = DI01;
+1383   2                              else if(key_val == ENT_CLOSED)  exit_flag = 1;
+1384   2                              break;
+1385   2                      case DQ02:
+1386   2                              if(key_val == SET_CLOSED)       flashboard_test();      
+1387   2                              else if(key_val == DWN_CLOSED)  mt_menu = DQ03;
+1388   2                              else if(key_val == UP_CLOSED)   mt_menu = DQ06;
+1389   2                              else if(key_val == ENT_CLOSED)  mt_menu = DQ01;
+1390   2                              break;
+1391   2                      case DQ03:
+1392   2                              if(key_val == SET_CLOSED)       size_flow_test();       
+1393   2                              else if(key_val == DWN_CLOSED)  mt_menu = DQ04;
+1394   2                              else if(key_val == UP_CLOSED)   mt_menu = DQ02;
+1395   2                              else if(key_val == ENT_CLOSED)  mt_menu = DQ01;
+1396   2                              break;
+1397   2                      case DQ04:
+1398   2                              if(key_val == SET_CLOSED)       discharge_bag_test();   
+1399   2                              else if(key_val == DWN_CLOSED)  mt_menu = DQ05;
+1400   2                              else if(key_val == UP_CLOSED)   mt_menu = DQ03;
+1401   2                              else if(key_val == ENT_CLOSED)  mt_menu = DQ01;
+1402   2                              break;
+1403   2                      case DQ05:
+1404   2                              if(key_val == SET_CLOSED)       clamp_bag_test();       
+1405   2                              else if(key_val == DWN_CLOSED)  mt_menu = DQ06;
+1406   2                              else if(key_val == UP_CLOSED)   mt_menu = DQ04;
+1407   2                              else if(key_val == ENT_CLOSED)  mt_menu = DQ01;
+1408   2                              break;
+1409   2                      case DQ06:
+1410   2                              if(key_val == SET_CLOSED)       fill_mot_sw_test();     
+1411   2                              else if(key_val == DWN_CLOSED)  mt_menu = DQ02;
+1412   2                              else if(key_val == UP_CLOSED)   mt_menu = DQ05;
+1413   2                              else if(key_val == ENT_CLOSED)  mt_menu = DQ01;
+1414   2                              break;
+1415   2              }
+1416   1      }
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 24  
+
+1417          void DpAddrSet(void)
+1418          {
+1419   1              bit t1_sta_flag = 0,para_change_flag = 0;
+1420   1              u8bit speed_conter,key_val = 0;
+1421   1              u8bit xdata backup_para = CommAddr;
+1422   1              err_code = 0;
+1423   1              t1_stop();
+1424   1              disp_int(CommAddr);
+1425   1              while(get_key(SET_RELEASE) != SET_RELEASE)      ;
+1426   1              while((t1_flag != 1) && (key_val != ENT_CLOSED)){
+1427   2                      if(t1_sta_flag == 0){
+1428   3                              t1_100ms(200);
+1429   3                              t1_sta_flag = 1;
+1430   3                      }
+1431   2                      key_val = get_key(CHK_ALL_KEY);
+1432   2                      if(key_val == NOKEY_CLOSED)     speed_conter = 0;
+1433   2                      if(key_val == UP_CLOSED){
+1434   3                              t1_stop();
+1435   3                              t1_sta_flag = 0;
+1436   3                              if(speed_conter <40) speed_conter++;
+1437   3                              if(speed_conter < 10)   CommAddr += 1;
+1438   3                              else if(speed_conter < 20)      CommAddr += 5;
+1439   3                              else    CommAddr += 10;
+1440   3                              para_change_flag = 1;
+1441   3                      }
+1442   2                      else if(key_val == DWN_CLOSED){
+1443   3                              t1_stop();
+1444   3                              t1_sta_flag = 0;
+1445   3                              if(speed_conter <40) speed_conter++;
+1446   3                              if(speed_conter < 10)   CommAddr -= 1;
+1447   3                              else if(speed_conter < 20)      CommAddr -= 5;
+1448   3                              else    CommAddr -= 10;
+1449   3                              para_change_flag = 1;
+1450   3                      }
+1451   2                      if(CommAddr > 200)      CommAddr = 60;
+1452   2                      else if(CommAddr > 60)  CommAddr = 1;
+1453   2                      disp_int(CommAddr);
+1454   2              }
+1455   1              t1_stop();
+1456   1              t1_sta_flag = 0;
+1457   1              while(get_key(ENT_RELEASE) != ENT_RELEASE);
+1458   1              if(t1_flag == 1)        CommAddr = backup_para;//定时时间到,恢复备份
+1459   1              else if(para_change_flag == 1){                                         //参数改变,保存参数
+1460   2                      t1_100ms(200);
+1461   2                      while((t1_flag != 1) && (err_code != WR_DONE)){
+1462   3                              err_code=eeprom_write(&CommAddr,COMMADDR_ADDR,1);
+1463   3                              if(err_code == E04)     disp_symbol(E04);
+1464   3                              else if(err_code == E05)        disp_symbol(E05);
+1465   3                      }
+1466   2                      if(err_code == WR_DONE){
+1467   3                              disp_symbol(GOOD);
+1468   3                              #if DP_ON
+1469   3                              if(DpSwitch == ON) pb_init();
+1470   3                              #endif
+1471   3                              delay_ms(250);
+1472   3                              delay_ms(250);
+1473   3                      }
+1474   2              }
+1475   1      }
+1476          void DpSwSet(void)
+1477          {
+1478   1              bit t1_sta_flag = 0,para_change_flag = 0;
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 25  
+
+1479   1              u8bit key_val = 0,backup_para = DpSwitch;
+1480   1              err_code = 0;
+1481   1              t1_stop();
+1482   1              disp_symbol(DpSwitch);
+1483   1              while(get_key(SET_RELEASE) != SET_RELEASE)      ;
+1484   1              while((t1_flag != 1) && (key_val != ENT_CLOSED)){
+1485   2                      if(t1_sta_flag == 0){
+1486   3                              t1_100ms(200);
+1487   3                              t1_sta_flag = 1;
+1488   3                      }
+1489   2                      key_val = get_key(CHK_ALL_KEY);
+1490   2                      if(key_val == UP_CLOSED){
+1491   3                              t1_stop();
+1492   3                              t1_sta_flag = 0;
+1493   3                              if((DpSwitch == ON)||(DpSwitch==OFF))DpSwitch=~DpSwitch;
+1494   3                              else DpSwitch = ON;
+1495   3                              para_change_flag = 1;
+1496   3                      }
+1497   2                      else if(key_val == DWN_CLOSED){
+1498   3                              t1_stop();
+1499   3                              t1_sta_flag = 0;
+1500   3                              if((DpSwitch == OFF)||(DpSwitch == ON))DpSwitch = ~DpSwitch;
+1501   3                              else DpSwitch = OFF;
+1502   3                              para_change_flag = 1;
+1503   3                      }
+1504   2                      disp_symbol(DpSwitch);
+1505   2              }
+1506   1              t1_stop();
+1507   1              t1_sta_flag = 0;
+1508   1              while(get_key(ENT_RELEASE) != ENT_RELEASE)      ;
+1509   1              if(t1_flag == 1)        DpSwitch = backup_para;
+1510   1              else if(para_change_flag == 1){                         //参数改变
+1511   2              DpErrFlag = 0;
+1512   2                      t1_100ms(200);
+1513   2                      while((t1_flag != 1) && (err_code != WR_DONE)){
+1514   3                              err_code = eeprom_write((u8bit *)&DpSwitch,DP_SW_ADDR,1);
+1515   3                              if(err_code == E04)     disp_symbol(E04);
+1516   3                              else if (err_code == E05)       disp_symbol(E05);
+1517   3                      }
+1518   2                      if(err_code == WR_DONE){
+1519   3                              disp_symbol(GOOD);
+1520   3                              #if DP_ON
+1521   3                              if(DpSwitch == ON) pb_init();
+1522   3                              #endif
+1523   3                              delay_ms(250);
+1524   3                              delay_ms(250);
+1525   3                      }
+1526   2              }
+1527   1      }
+1528          void DpSet(void)
+1529          {
+1530   1              u8bit xdata key_val;
+1531   1              if(t1_sta_flag == 0){
+1532   2                      t1_100ms(200);
+1533   2                      t1_sta_flag = 1;
+1534   2              }
+1535   1              disp_symbol(md_menu);
+1536   1              key_val = get_key(CHK_ALL_KEY);
+1537   1              if(key_val != NOKEY_CLOSED){
+1538   2                      t1_stop();
+1539   2                      t1_sta_flag = 0;
+1540   2              }
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 26  
+
+1541   1              switch(md_menu){
+1542   2                      case MD01:
+1543   2                              if(key_val == SET_CLOSED)       DpAddrSet();
+1544   2                              else if(key_val == DWN_CLOSED)  md_menu = MD02;
+1545   2                              else if(key_val == UP_CLOSED)   md_menu = MD02;
+1546   2                              else if(key_val == ENT_CLOSED)  exit_flag = 1;
+1547   2                              break;
+1548   2                      case MD02:
+1549   2                              if(key_val == SET_CLOSED)       DpSwSet();
+1550   2                              else if(key_val == DWN_CLOSED)  md_menu = MD01;
+1551   2                              else if(key_val == UP_CLOSED)   md_menu = MD01;
+1552   2                              else if(key_val == ENT_CLOSED)  exit_flag = 1;
+1553   2                              break;
+1554   2              }
+1555   1      }
+1556          void VerDisp(void)
+1557          {
+1558   1              u8bit xdata key_val;
+1559   1              u8bit *p_data = Version;
+1560   1              if(t1_sta_flag == 0){
+1561   2                      t1_100ms(200);
+1562   2                      t1_sta_flag = 1;
+1563   2              }                       
+1564   1              key_val = get_key(CHK_ALL_KEY);
+1565   1              if(key_val != NOKEY_CLOSED){
+1566   2                      t1_stop();
+1567   2                      t1_sta_flag = 0;
+1568   2              }       
+1569   1              
+1570   1              disp_seg(seg_sym[*p_data - 0x30],BIT5); p_data++;
+1571   1              disp_seg(seg_sym[SYM__],BIT4);                  p_data++;
+1572   1              disp_seg(seg_sym[*p_data - 0x30],BIT3); p_data++;
+1573   1              disp_seg(seg_dot[*p_data - 0x30],BIT2); p_data++;
+1574   1              disp_seg(seg_sym[*p_data - 0x30],BIT1); p_data++;
+1575   1              disp_seg(seg_sym[*p_data - 0x30],BIT0);
+1576   1              if(key_val == ENT_CLOSED)       exit_flag = 1;
+1577   1      }
+1578          void mr_func(void)
+1579          {
+1580   1              if(t1_sta_flag == 0){
+1581   2                      t1_100ms(200);
+1582   2                      t1_sta_flag = 1;
+1583   2              }
+1584   1              switch(mr_menu){
+1585   2                      case MR01:
+1586   2                              if(get_key(SET_CLOSED) == SET_CLOSED){
+1587   3                                      t1_stop();
+1588   3                                      mf_menu = MF01;
+1589   3                                      t1_sta_flag = 0;
+1590   3                                      exit_flag = 0;
+1591   3                                      while(get_key(ENT_RELEASE) != ENT_RELEASE);
+1592   3                                      while((t1_flag != 1) && (exit_flag == 0))       func_func();
+1593   3                                      while(get_key(ENT_RELEASE) != ENT_RELEASE);
+1594   3                                      disp_symbol(FUNC);
+1595   3                              }
+1596   2                              else if(get_key(DWN_CLOSED) == DWN_CLOSED){
+1597   3                                      while(get_key(CHK_ALL_KEY) != NOKEY_CLOSED);
+1598   3                                      mr_menu = MR04;
+1599   3                                      t1_flag = 0;
+1600   3                                      err_code = 0;
+1601   3                                      t1_stop();
+1602   3                                      t1_sta_flag = 0;
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 27  
+
+1603   3                                      disp_symbol(CAL);
+1604   3                              }
+1605   2                              else if(get_key(UP_CLOSED) == UP_CLOSED){
+1606   3                                      while(get_key(CHK_ALL_KEY) != NOKEY_CLOSED);
+1607   3                                      mr_menu = MR07;
+1608   3                                      t1_flag = 0;
+1609   3                                      err_code = 0;
+1610   3                                      t1_stop();
+1611   3                                      t1_sta_flag = 0;
+1612   3                                      disp_symbol(VER);
+1613   3                              }       
+1614   2                              break;
+1615   2                      case MR04:
+1616   2                              if(get_key(SET_CLOSED) == SET_CLOSED){
+1617   3                                      t1_stop();
+1618   3                                      mc_menu = MC01;
+1619   3                                      t1_sta_flag = 0;
+1620   3                                      exit_flag = 0;
+1621   3                                      while(get_key(ENT_RELEASE) != ENT_RELEASE);
+1622   3                                      while((t1_flag != 1) && (exit_flag == 0))       cal_func();
+1623   3                                      while(get_key(ENT_RELEASE) != ENT_RELEASE);
+1624   3                                      disp_symbol(CAL);
+1625   3                              }               
+1626   2                              else if(get_key(DWN_CLOSED) == DWN_CLOSED){
+1627   3                                      while(get_key(CHK_ALL_KEY) != NOKEY_CLOSED);
+1628   3                                      mr_menu = MR05;
+1629   3                                      t1_flag = 0;
+1630   3                                      err_code = 0;
+1631   3                                      t1_stop();
+1632   3                                      t1_sta_flag = 0;
+1633   3                                      disp_symbol(TEST);
+1634   3                              }
+1635   2                              else if(get_key(UP_CLOSED) == UP_CLOSED){
+1636   3                                      while(get_key(CHK_ALL_KEY) != NOKEY_CLOSED);
+1637   3                                      mr_menu = MR01;
+1638   3                                      t1_flag = 0;
+1639   3                                      err_code = 0;
+1640   3                                      t1_stop();
+1641   3                                      t1_sta_flag = 0;
+1642   3                                      disp_symbol(FUNC);
+1643   3                              }
+1644   2                              break;
+1645   2                      case MR05:
+1646   2                              if(get_key(SET_CLOSED) == SET_CLOSED){
+1647   3                                      t1_stop();
+1648   3                                      mt_menu = DI01;
+1649   3                                      t1_sta_flag = 0;
+1650   3                                      exit_flag = 0;
+1651   3                                      while(get_key(ENT_RELEASE) != ENT_RELEASE);
+1652   3                                      while((t1_flag != 1) && (exit_flag == 0))       test_func();
+1653   3                                      while(get_key(ENT_RELEASE) != ENT_RELEASE);
+1654   3                                      disp_symbol(TEST);
+1655   3                              }
+1656   2                              else if(get_key(DWN_CLOSED) == DWN_CLOSED){
+1657   3                                      while(get_key(CHK_ALL_KEY) != NOKEY_CLOSED);
+1658   3                                      mr_menu = MR06;
+1659   3                                      t1_flag = 0;
+1660   3                                      err_code = 0;
+1661   3                                      t1_stop();
+1662   3                                      t1_sta_flag = 0;
+1663   3                                      disp_symbol(DPSET);
+1664   3                              }
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 28  
+
+1665   2                              else if(get_key(UP_CLOSED) == UP_CLOSED){
+1666   3                                      while(get_key(CHK_ALL_KEY) != NOKEY_CLOSED);
+1667   3                                      mr_menu = MR04;
+1668   3                                      t1_flag = 0;
+1669   3                                      err_code = 0;
+1670   3                                      t1_stop();
+1671   3                                      t1_sta_flag = 0;
+1672   3                                      disp_symbol(CAL);
+1673   3                              }
+1674   2                              break;
+1675   2                      case MR06:
+1676   2                              if(get_key(SET_CLOSED) == SET_CLOSED){
+1677   3                                      t1_stop();
+1678   3                                      md_menu = MD01;
+1679   3                                      t1_sta_flag = 0;
+1680   3                                      exit_flag = 0;
+1681   3                                      while(get_key(ENT_RELEASE) != ENT_RELEASE);
+1682   3                                      while((t1_flag != 1) && (exit_flag == 0))       DpSet();
+1683   3                                      while(get_key(ENT_RELEASE) != ENT_RELEASE);
+1684   3                                      disp_symbol(DPSET);
+1685   3                              }
+1686   2                              else if(get_key(DWN_CLOSED) == DWN_CLOSED){
+1687   3                                      while(get_key(CHK_ALL_KEY) != NOKEY_CLOSED);
+1688   3                                      mr_menu = MR07;
+1689   3                                      t1_flag = 0;
+1690   3                                      err_code = 0;
+1691   3                                      t1_stop();
+1692   3                                      t1_sta_flag = 0;
+1693   3                                      disp_symbol(VER);
+1694   3                              }
+1695   2                              else if(get_key(UP_CLOSED) == UP_CLOSED){
+1696   3                                      while(get_key(CHK_ALL_KEY) != NOKEY_CLOSED);
+1697   3                                      mr_menu = MR05;
+1698   3                                      t1_flag = 0;
+1699   3                                      err_code = 0;
+1700   3                                      t1_stop();
+1701   3                                      t1_sta_flag = 0;
+1702   3                                      disp_symbol(TEST);
+1703   3                              }
+1704   2                              break;
+1705   2                      case MR07:
+1706   2                              if(get_key(SET_CLOSED) == SET_CLOSED){
+1707   3                                      t1_stop();
+1708   3                                      t1_sta_flag = 0;
+1709   3                                      exit_flag = 0;
+1710   3                                      while(get_key(ENT_RELEASE) != ENT_RELEASE);
+1711   3                                      while((t1_flag != 1) && (exit_flag == 0))       VerDisp();
+1712   3                                      while(get_key(ENT_RELEASE) != ENT_RELEASE);
+1713   3                                      disp_symbol(VER);
+1714   3                              }
+1715   2                              else if(get_key(DWN_CLOSED) == DWN_CLOSED){
+1716   3                                      while(get_key(CHK_ALL_KEY) != NOKEY_CLOSED);
+1717   3                                      mr_menu = MR01;
+1718   3                                      t1_flag = 0;
+1719   3                                      err_code = 0;
+1720   3                                      t1_stop();
+1721   3                                      t1_sta_flag = 0;
+1722   3                                      disp_symbol(FUNC);
+1723   3                              }
+1724   2                              else if(get_key(UP_CLOSED) == UP_CLOSED){
+1725   3                                      while(get_key(CHK_ALL_KEY) != NOKEY_CLOSED);
+1726   3                                      mr_menu = MR06;
+C51 COMPILER V9.52.0.0   MENU_FUNC                                                         01/28/2016 10:05:48 PAGE 29  
+
+1727   3                                      t1_flag = 0;
+1728   3                                      err_code = 0;
+1729   3                                      t1_stop();
+1730   3                                      t1_sta_flag = 0;
+1731   3                                      disp_symbol(DPSET);
+1732   3                              }
+1733   2                              break;
+1734   2              }
+1735   1      }       
+1736          void menu_func(void)
+1737          {
+1738   1              u8bit xdata copy_EIE1,copy_EIE2,copy_IE;
+1739   1              t1_sta_flag = 0;
+1740   1              copy_EIE1 = EIE1;
+1741   1              copy_EIE2 = EIE2;
+1742   1              copy_IE = IE;                                                                   //备份中断允许
+1743   1              IE = 0;
+1744   1              IE = 0;
+1745   1              EIE1 = 0;
+1746   1              EIE2 = 0;                                                                               //关所有中断
+1747   1              if(get_key(SET_CLOSED) == SET_CLOSED){
+1748   2                      t1_100ms(20);
+1749   2                      while((get_key(SET_RELEASE) != SET_RELEASE) && (t1_flag != 1))  run_disp(NW_scale());
+1750   2                      if(t1_flag == 1){
+1751   3                              t1_stop();
+1752   3                              disp_symbol(SET);
+1753   3                              while(get_key(CHK_ALL_KEY) != NOKEY_CLOSED);
+1754   3                              t1_flag = 0;
+1755   3                              err_code = 0;
+1756   3                              mr_menu = MR01;
+1757   3                              disp_symbol(FUNC);
+1758   3                              while((t1_flag!=1)&&(get_key(ENT_CLOSED) != ENT_CLOSED)) mr_func();
+1759   3                      }
+1760   2              }
+1761   1              t1_stop();
+1762   1              t1_flag = 0;
+1763   1              EIE1 = copy_EIE1;
+1764   1              EIE2 = copy_EIE2;
+1765   1              IE = copy_IE;
+1766   1              IE = copy_IE;
+1767   1              return;
+1768   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =  11081    ----
+   CONSTANT SIZE    =      7    ----
+   XDATA SIZE       =      5      66
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----      40
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      2      34
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

@@ -1,0 +1,1 @@
+"public.c" OPTIMIZE (7,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\debug\public.lst) OBJECT(.\debug\public.obj)

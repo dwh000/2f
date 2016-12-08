@@ -1,0 +1,1 @@
+"weighting.c" OPTIMIZE (7,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\debug\weighting.lst) OBJECT(.\debug\weighting.obj)

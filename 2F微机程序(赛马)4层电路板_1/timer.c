@@ -1,0 +1,234 @@
+/******************************************************************************
+*文件名: timer.c
+*作  者: 王文辉
+*单  位: 唐山智能电子有限公司
+*日  期: 2012-9-21
+*版  本: 实验版本
+*功能描述: 定时器设置及初始化函数
+*******************************************************************************/
+#include "timer.h"
+#include "terminal.h"
+
+u8bit			discharge_cnt,	//掉袋定时时间,单位0.1s
+				t3_cnt = 4,		//T3 time base 是25ms,t3_cnt = 4 实现100ms定时
+				t4_cnt = 2;		//T4 time base 是25ms,t4_cnt = 2 实现50ms定时
+u8bit xdata 	DpCnt = 8,		//用于PB通讯定时.
+				t0_cnt;			//t0定时器计数个数
+bit				t0_flag;		//T0定时溢出标志
+extern bit t1_flag,discharge_pulse_flag,DpEnFlag,disp_flag;
+extern u8bit xdata t1_cnt,A_T_time,DpSwitch,DispCnt;
+extern u8bit discharge_cnt;
+extern u16bit xdata	shut_fb_w,sf_weight,sf_weight_adj_val,weight_correct_val;
+
+/*******************************************************************************
+*原  型:void time01_init(void)
+*形  参:无.
+*功  能:定时器0及定时器1初始化函数.
+*返回值:无.
+*******************************************************************************/
+void time01_init(void)				//T0,T1工作于定时器方式1,采用系统时钟48分频
+{
+	SFRPAGE = TIMER01_PAGE;
+	CKCON = 0X02;
+	ET0 = 0;
+	TR0 = 0;
+	TR1 = 0;
+	TF0 = 0;
+	TMOD = 0X11;
+	SFRPAGE = CONFIG_PAGE;
+}
+
+/*******************************************************************************
+*原  型:void time3_init(void)
+*形  参:无.
+*功  能:定时器3初始化函数.
+*返回值:无.
+*******************************************************************************/
+void time3_init(void)				    //25ms time base,用于产生脉冲宽度
+{
+	char SFRPAGE_SAVE;
+	SFRPAGE_SAVE = SFRPAGE;             // Preserve SFRPAGE
+	SFRPAGE = TMR3_PAGE;
+	TMR3CN = 0x00;                      // Timer in 16-bit auto-reload up timer
+	TMR3CF = 0x00;                      // SYSCLK/12 is time base; no output;
+	RCAP3 = 0x4c00;
+	TMR3 = RCAP3;
+	TR3 = 1;                             // Start Timer3
+	EA = 1;
+	EIE2 |= 0X01;						//开定时器3中断
+	SFRPAGE = SFRPAGE_SAVE;             // Restore SFRPAGE
+}
+/*******************************************************************************
+*原  型:void time4_init(void)
+*形  参:无.
+*功  能:定时器4初始化函数.
+*返回值:无.
+*******************************************************************************/
+void time4_init(void)				//25ms time base ,用于检重秤校正
+{
+	char SFRPAGE_SAVE;
+	SFRPAGE_SAVE = SFRPAGE;             // Preserve SFRPAGE
+	SFRPAGE = TMR4_PAGE;
+	TMR4CN = 0x00;                      // Timer in 16-bit auto-reload up timer
+	TMR4CF = 0x00;                      // SYSCLK/12 is time base; no output;
+	RCAP4 = 0x4c00;
+	/*
+	TMR4 = RCAP4;
+	TR4 = 1;                             
+	EA = 1;
+	EIE2 |= 0X04;*/
+	SFRPAGE = SFRPAGE_SAVE;             // Restore SFRPAGE	
+}
+
+/*******************************************************************************
+*原  型:void t0_1ms(u8bit cnt)
+*形  参:无.
+*功  能:T0定时器1ms*cnt定时.
+*返回值:无.
+*******************************************************************************/
+void t0_1ms_load()
+{
+	SFRPAGE = TIMER01_PAGE;
+	TH0 = 0XFE;
+	TL0 = 0X33;
+	TR0 = 1;
+	while(!TF0);
+	TF0 = 0;
+	SFRPAGE = CONFIG_PAGE;
+}
+/*******************************************************************************
+*原  型:void t1_100ms(u8bit cnt)
+*形  参:无.
+*功  能:T1定时器100ms*cnt定时.
+*返回值:无.
+*******************************************************************************/
+void t1_100ms(u8bit cnt)
+{
+	SFRPAGE = TIMER01_PAGE;
+	EA = 1;											//开放中断
+	ET1 = 1;										//开放定时器1中断
+	TH1 = 0X4c;
+	TL1 = 0X00;										//100ms定时装载初值
+	t1_cnt = cnt;
+	t1_flag = 0;
+	TR1 = 1;
+	SFRPAGE = CONFIG_PAGE;
+}
+//T1定时器关中断关定时器
+void t1_stop(void)
+	{
+	SFRPAGE = TIMER01_PAGE;
+	ET1 = 0;										//关定时器1中断
+	TR1 = 0;
+	SFRPAGE = CONFIG_PAGE;
+	}
+//T0定时器关中断关定时器
+void t0_stop(void)
+	{
+	SFRPAGE = TIMER01_PAGE;
+	ET0 = 0;										//关定时器0中断
+	TR0 = 0;
+	SFRPAGE = CONFIG_PAGE;
+	}
+void T0DelayMs(u8bit cnt)
+{
+	u8bit temp_ea = EA;
+	while(cnt){
+		t0_1ms_load();
+		cnt--;
+	}
+	t0_stop();
+	EA = temp_ea;
+}
+#if !saima
+/*******************************************************************************
+*原  型:void discharge_pulse100ms(u8bit cnt);
+*形  参:	cnt			掉袋脉冲宽度 
+*功  能:T3启动 (cnt * 0.1) s 定时,用于输出掉袋脉冲.
+*返回值:无.
+*******************************************************************************/
+void discharge_pulse100ms(u8bit cnt)
+{
+	discharge_bag_sw_out = OPEN;
+	discharge_cnt = cnt;
+	discharge_pulse_flag = 1;
+}
+#endif
+/*******************************************************************************
+*原  型:void t4_50ms_cl_track(u8bit a_t);
+*形  参:	a_t			抵达时间 
+*功  能:T4启动 (a_t * 0.05) s 定时,用于闭环校正功能.
+*返回值:无.
+*******************************************************************************/
+void t4_50ms_cl_track(u8bit a_t)
+{
+	char SFRPAGE_SAVE;
+	A_T_time = a_t;
+	SFRPAGE_SAVE = SFRPAGE;             // Preserve SFRPAGE
+	SFRPAGE = TMR4_PAGE;
+	TMR4 = RCAP4;
+	TR4 = 1;                             
+	EA = 1;
+	EIE2 |= 0X04;
+	SFRPAGE = SFRPAGE_SAVE;             // Restore SFRPAGE
+}
+/*定时器0中断服务程序*********************************************************
+void t0_int(void) interrupt 1				//用于延时1ms(time base)
+{
+	TH0 = 0XFE;
+	TL0 = 0X33;								//1ms定时重装
+	t0_cnt--;
+	if(t0_cnt == 0) t0_flag = 1;
+}*/
+/*定时器1中断服务程序**********************************************************/	
+void t1_int(void) interrupt 3                               //用于延时100ms(time base)
+{
+    TH1 = 0X4c;
+    TL1 = 0X00;                                             //100ms定时重装
+    t1_cnt--;
+    if(t1_cnt == 0) t1_flag = 1;
+}
+/*定时器3中断服务程序**********************************************************/
+void t3_int(void) interrupt 14                              //t3定时器中断,用于产生脉冲,中断周期:25ms
+{
+    if(discharge_pulse_flag){                               //关闸板定时控制
+        if((--t3_cnt) == 0){
+            if(--discharge_cnt == 0){
+                discharge_pulse_flag = 0;
+                discharge_bag_sw_out = SHUT;
+            }
+        t3_cnt = 4;
+        }
+    }
+    if(!disp_flag){
+        if(++DispCnt == 8){
+            DispCnt = 0;
+            disp_flag = 1;
+        }
+    }
+    #if DP_ON
+    if((DpEnFlag == 1) && (DpSwitch == ON)){
+        if((--DpCnt) == 0){
+            EA = 0;
+            DpDataExchange();
+            EA = 1;
+            DpCnt = 8;
+        }
+    }
+    #endif //END OF DP_ON
+    TF3 = 0;
+}
+/*定时器4中断服务程序**********************************************************/
+void t4_int(void) interrupt 16		//T4定时器中断,50ms(time base),用于自修正
+{
+    if((--t4_cnt) == 0){ 
+        if((--A_T_time) == 0){
+            if(add_correct == 1)	shut_fb_w += weight_correct_val;
+            if(reduce_correct == 1)	shut_fb_w -= weight_correct_val;
+            TR4 = 0;
+            sf_weight = shut_fb_w - sf_weight_adj_val;
+        }
+        t4_cnt = 2;
+    }
+    TF4 = 0;
+}

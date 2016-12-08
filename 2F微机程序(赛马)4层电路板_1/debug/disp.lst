@@ -1,0 +1,540 @@
+C51 COMPILER V9.52.0.0   DISP                                                              01/28/2016 10:05:47 PAGE 1   
+
+
+C51 COMPILER V9.52.0.0, COMPILATION OF MODULE DISP
+OBJECT MODULE PLACED IN .\debug\disp.obj
+COMPILER INVOKED BY: D:\Program Files (x86)\keil\C51\BIN\C51.EXE disp.c OPTIMIZE(7,SPEED) BROWSE DEBUG OBJECTEXTEND PRIN
+                    -T(.\debug\disp.lst) OBJECT(.\debug\disp.obj)
+
+line level    source
+
+   1          /***********************************************************************************
+   2          *文件名: disp.c
+   3          *作  者: 王文辉
+   4          *单  位: 唐山智能电子有限公司
+   5          *日  期: 2012-9-21
+   6          *版  本: 实验版本
+   7          *功能描述: 显示相关的函数,包含了端口定时,显示字符定时及显示输出.
+   8          ***********************************************************************************/
+   9          #include "disp.h"
+  10          #include "timer.h"
+  11          //宏定义******************************************************************************
+  12          #define UPPERLIMIT              65180
+  13          #define LOWERLIMIT              -5000
+  14          #define DISP_ADDR               P6                              //数码显示段码输出端口定义
+  15          #define DIGIT_ADDR              P7                              //数码显示位控制端口定义
+  16          //显示位控制端口位定义***************************************************************
+  17          sbit DIGIT1_ADDR = DIGIT_ADDR^0;
+  18          sbit DIGIT2_ADDR = DIGIT_ADDR^1;
+  19          sbit DIGIT3_ADDR = DIGIT_ADDR^2;
+  20          sbit DIGIT4_ADDR = DIGIT_ADDR^3;
+  21          sbit DIGIT5_ADDR = DIGIT_ADDR^4;
+  22          sbit DIGIT6_ADDR = DIGIT_ADDR^5; 
+  23          //段码译码数组定义,存放于程序区******************************************************
+  24          /*0,1,2,3,4,5,6,7,8,9,A,b,C,c,d,E,F,H,h,L,n,N,o,P,r,t,U,-, ,0x47,0xa3,-1,_*/
+  25          u8bit code seg_sym[40] = {0xC0,0xF9,0xA4,0xB0,0x99,0x92,0x82,0xF8,0x80,0x90,
+  26                                                            0x88,0x83,0xC6,0xA7,0xA1,0x86,0x8E,0x89,0x8B,0xC7,
+  27                                                            0xAB,0xC8,0xA3,0x8C,0xAF,0x87,0xC1,0xBF,0xff,0xb9,
+  28                                                            0xf7,0XEF};
+  29          u8bit code seg_dot[40] = {0x40,0x79,0x24,0x30,0x19,0x12,0x02,0x78,0x00,0x10,
+  30                                                            0x88,0x83,0xC6,0x27,0xA1,0x86,0x8E,0x89,0x8B,0xC7,
+  31                                                            0xAB,0xC8,0xA3,0x8C,0xAF,0x87,0xC1,0xBF,0x7f,0xb9,
+  32                                                            0xf7,0XEF};
+  33          
+  34          /*断码显示函数*****************************************************************
+  35          形参:
+  36                  seg_code        :要显示的段码
+  37                  bit_addr        :显示段码的位,从高到低为0x20,0x10,0x08,0x04,0x02,0x01;
+  38          返回值:
+  39          *******************************************************************************/        
+  40          void disp_seg(u8bit seg_code,u8bit bit_addr)
+  41          {
+  42   1              SFRPAGE = CONFIG_PAGE;
+  43   1              DIGIT_ADDR |= bit_addr;
+  44   1              DISP_ADDR = seg_code; 
+  45   1              DIGIT_ADDR &= 0Xc0;
+  46   1      }
+  47                  
+  48          /*称重运行时的显示函数*********************************************************
+  49          形参:
+  50                  disp_data       :需要显示的数据,实际显示时,只显示两位小数,最低位不显示.
+  51          返回值:
+  52          *******************************************************************************/        
+  53          void run_disp(s32bit disp_data)
+  54          {
+C51 COMPILER V9.52.0.0   DISP                                                              01/28/2016 10:05:47 PAGE 2   
+
+  55   1              bit sign_flag;
+  56   1              u8bit xdata n,disp[6];
+  57   1              
+  58   1              if(disp_data > UPPERLIMIT){                             //超上限报警,返回
+  59   2                      disp_symbol(OE_H);
+  60   2                      return;
+  61   2              }
+  62   1              if(disp_data < LOWERLIMIT){                             //超下限报警,返回
+  63   2                      disp_symbol(OE_L);
+  64   2                      return;
+  65   2              }
+  66   1              if(disp_data >= 0)      sign_flag = 0;          //disp_data为正数       
+  67   1              else{                                                                   //disp_data为负数
+  68   2                      sign_flag = 1;
+  69   2                      disp_data = 0 - disp_data;      
+  70   2              }       
+  71   1              for(n = 0;n<6;n++){                                             //求数据每一位的值
+  72   2                      disp[n] = disp_data%10;
+  73   2                      disp_data /= 10;
+  74   2              }
+  75   1              if(sign_flag == 0){                                             //处理第4位显示的内容
+  76   2                      if(disp[4] == 0)        disp[4] = SYM_ ;//' '
+  77   2              }
+  78   1              else{
+  79   2                      if(sign_flag == 1)      disp[4] = SYM__;//'-'
+  80   2                      else{
+  81   3                              disp_symbol(E06);                               //Err_6
+  82   3                              return;                 
+  83   3                      }
+  84   2              }
+  85   1              disp_seg(seg_sym[disp[1]],BIT0);                        //显示百分位
+  86   1              disp_seg(seg_sym[disp[2]],BIT1);                        //显示十分位
+  87   1              disp_seg(seg_dot[disp[3]],BIT2);                        //显示个位
+  88   1              disp_seg(seg_sym[disp[4]],BIT3);                        //显示十位                                      
+  89   1              return;
+  90   1      }
+  91                  
+  92          /*标定时的显示函数*************************************************************
+  93          形参:
+  94                  disp_data       :需要显示的数据,显示三位小数
+  95          返回值:
+  96          *******************************************************************************/
+  97          void weight_disp(s32bit disp_data)
+  98                  {
+  99   1              bit sign_flag;
+ 100   1              u8bit xdata n,disp[6];
+ 101   1              
+ 102   1              DIGIT_ADDR |= 0X3F;
+ 103   1              DISP_ADDR = 0XFF;
+ 104   1              DIGIT_ADDR &= 0XC0;                                             //显示清屏
+ 105   1              if(disp_data >= 0)      sign_flag = 0;          //disp_data为正数       
+ 106   1              else                                                                    //disp_data为负数
+ 107   1                      {
+ 108   2                      sign_flag = 1;
+ 109   2                      disp_data = 0 - disp_data;      
+ 110   2                      }
+ 111   1              for(n = 0;n<6;n++)                                              //求数据每一位的值
+ 112   1                      {
+ 113   2                      disp[n] = disp_data%10;
+ 114   2                      disp_data /= 10;
+ 115   2                      }
+ 116   1              if(sign_flag == 0)
+C51 COMPILER V9.52.0.0   DISP                                                              01/28/2016 10:05:47 PAGE 3   
+
+ 117   1                      {
+ 118   2                      if(disp[5] == 0)
+ 119   2                              {
+ 120   3                              if(disp[4] == 0)        disp[4] = SYM_;         //' '
+ 121   3                              disp[5] = SYM_;                                                 //' '           
+ 122   3                              }
+ 123   2                      }
+ 124   1              else
+ 125   1                      {
+ 126   2                      if(sign_flag == 1)
+ 127   2                              {
+ 128   3                              if(disp[5] == 0)
+ 129   3                                      {
+ 130   4                                      if(disp[4] == 0)
+ 131   4                                              {                                       //W3
+ 132   5                                              disp[4] = SYM__;        //'-'
+ 133   5                                              disp[5] = SYM_;         //' '
+ 134   5                                              }
+ 135   4                                      else    disp[5] = SYM__;//W6 '-'                
+ 136   4                                      }
+ 137   3                              else    disp[5] = SYM__1;               //W5 '-1'                                                       
+ 138   3                              }
+ 139   2                      else
+ 140   2                              {
+ 141   3                              disp_symbol(E06);
+ 142   3                              return;
+ 143   3                              }
+ 144   2                      }
+ 145   1              disp_seg(seg_sym[disp[0]],BIT0);                        //显示千分位
+ 146   1              disp_seg(seg_sym[disp[1]],BIT1);                        //显示百分位
+ 147   1              disp_seg(seg_sym[disp[2]],BIT2);                        //显示十分位
+ 148   1              disp_seg(seg_dot[disp[3]],BIT3);                        //显示个位
+ 149   1              disp_seg(seg_sym[disp[4]],BIT4);                        //显示十位
+ 150   1              disp_seg(seg_sym[disp[5]],BIT5);                        //显示百位      
+ 151   1              delay_ms(1);
+ 152   1              return; 
+ 153   1              }
+ 154          /*字符显示函数*****************************************************************
+ 155          形参:
+ 156                  disp_code       :显示字符的代码
+ 157          返回值:
+ 158          *******************************************************************************/
+ 159          void disp_symbol(u8bit disp_code)
+ 160                  {
+ 161   1              u8bit xdata disp[6] = {28,28,28,28,28,28};      
+ 162   1                      switch(disp_code)
+ 163   1                              {
+ 164   2                              case OE_H:
+ 165   2                                      disp[3] = SYM_O;
+ 166   2                                      disp[2] = SYM_L;                        //oL
+ 167   2                                      break;
+ 168   2                              case OE_L:
+ 169   2                                      disp[3] = SYM__1;                       //-1
+ 170   2                                      break;
+ 171   2                              case CLR_ALL:
+ 172   2                                      break;
+ 173   2                              case NO_OPT:
+ 174   2                                      return;
+ 175   2                              case SET:
+ 176   2                                      disp[5] = SYM_S;
+ 177   2                                      disp[4] = SYM_E;
+ 178   2                                      disp[3] = SYM_T;
+C51 COMPILER V9.52.0.0   DISP                                                              01/28/2016 10:05:47 PAGE 4   
+
+ 179   2                                      break;
+ 180   2                              case CAL:
+ 181   2                                      disp[5] = SYM_C;
+ 182   2                                      disp[4] = SYM_A;
+ 183   2                                      disp[3] = SYM_L;                                
+ 184   2                                      break;
+ 185   2                              case FUNC:
+ 186   2                                      disp[5] = SYM_F;
+ 187   2                                      disp[4] = SYM_U;
+ 188   2                                      disp[3] = SYM_N;
+ 189   2                                      disp[2] = SYM_C;
+ 190   2                                      break;
+ 191   2                              case TEST:
+ 192   2                                      disp[5] = SYM_T;
+ 193   2                                      disp[4] = SYM_E;
+ 194   2                                      disp[3] = SYM_S;
+ 195   2                                      disp[2] = SYM_T;
+ 196   2                                      break;
+ 197   2                              case DPSET:
+ 198   2                                      disp[5] = SYM_D;
+ 199   2                                      disp[4] = SYM_P;
+ 200   2                                      disp[3] = SYM_S;
+ 201   2                                      disp[2] = SYM_E;
+ 202   2                                      disp[1] = SYM_T;
+ 203   2                                      break;
+ 204   2                              case VER:
+ 205   2                                      disp[5] = SYM_U;
+ 206   2                                      disp[4] = SYM_E;
+ 207   2                                      disp[3] = SYM_R;
+ 208   2                                      break;  
+ 209   2                              case GOOD:
+ 210   2                                      disp[5] = SYM_G;
+ 211   2                                      disp[4] = SYM_O;
+ 212   2                                      disp[3] = SYM_O;
+ 213   2                                      disp[2] = SYM_D;
+ 214   2                                      break;
+ 215   2                              case OFF:
+ 216   2                                      disp[2] = SYM_O;
+ 217   2                                      disp[1] = SYM_F;
+ 218   2                                      disp[0] = SYM_F;
+ 219   2                                      break;
+ 220   2                              case ON:
+ 221   2                                      disp[1] = SYM_O;
+ 222   2                                      disp[0] = SYM_N;
+ 223   2                                      break;
+ 224   2                              case MC01:
+ 225   2                                      disp[5] = SYM_S;
+ 226   2                                      disp[4] = SYM_P;
+ 227   2                                      disp[3] = SYM_A;
+ 228   2                                      disp[2] = SYM_N;
+ 229   2                                      break;
+ 230   2                              case MC02:
+ 231   2                                      disp[5] = SYM_T;
+ 232   2                                      disp[4] = SYM_A;
+ 233   2                                      disp[3] = SYM_R;
+ 234   2                                      disp[2] = SYM_E;
+ 235   2                                      break;
+ 236   2                              case MC03:
+ 237   2                                      disp[5] = SYM_G;
+ 238   2                                      disp[4] = SYM_A;
+ 239   2                                      disp[3] = SYM_I;
+ 240   2                                      disp[2] = SYM_N;
+C51 COMPILER V9.52.0.0   DISP                                                              01/28/2016 10:05:47 PAGE 5   
+
+ 241   2                                      break;
+ 242   2                              case ERR_CL:
+ 243   2                                      disp[5] = SYM_E;
+ 244   2                                      disp[4] = SYM_R;
+ 245   2                                      disp[3] = SYM_R;
+ 246   2                                      disp[2] = SYM__;
+ 247   2                                      disp[1] = SYM_C;
+ 248   2                                      disp[0] = SYM_L;
+ 249   2                                      break;
+ 250   2                              case ERR_HL:
+ 251   2                                      disp[5] = SYM_E;
+ 252   2                                      disp[4] = SYM_R;
+ 253   2                                      disp[3] = SYM_R;
+ 254   2                                      disp[2] = SYM__;
+ 255   2                                      disp[1] = SYM_H;
+ 256   2                                      disp[0] = SYM_L;
+ 257   2                                      break;
+ 258   2                              case DI01:
+ 259   2                                      disp[5] = SYM_I;
+ 260   2                                      disp[4] = SYM_N;
+ 261   2                                      disp[3] = SYM_P;
+ 262   2                                      disp[2] = SYM_U;
+ 263   2                                      disp[1] = SYM_T;
+ 264   2                                      break;
+ 265   2                              case NOINPUT:
+ 266   2                                      disp[5] = SYM_N;
+ 267   2                                      disp[4] = SYM_O;
+ 268   2                                      disp[3] = SYM__;
+ 269   2                                      disp[2] = SYM_I;
+ 270   2                                      disp[1] = SYM_N;
+ 271   2                                      break;
+ 272   2                              case DQ01:
+ 273   2                                      disp[5] = SYM_O;
+ 274   2                                      disp[4] = SYM_U;
+ 275   2                                      disp[3] = SYM_T;
+ 276   2                                      disp[2] = SYM_P;
+ 277   2                                      disp[1] = SYM_U;
+ 278   2                                      disp[0] = SYM_T;
+ 279   2                                      break;
+ 280   2                              case DQ02:
+ 281   2                                      disp[5] = SYM_D;
+ 282   2                                      disp[4] = SYM_O;
+ 283   2                                      disp[3] = SYM__;
+ 284   2                                      disp[2] = 1;
+ 285   2                                      break;
+ 286   2                              case DQ03:
+ 287   2                                      disp[5] = SYM_D;
+ 288   2                                      disp[4] = SYM_O;
+ 289   2                                      disp[3] = SYM__;
+ 290   2                                      disp[2] = 2;
+ 291   2                                      break;
+ 292   2                              case DQ04:
+ 293   2                                      disp[5] = SYM_D;
+ 294   2                                      disp[4] = SYM_O;
+ 295   2                                      disp[3] = SYM__;
+ 296   2                                      disp[2] = 3;
+ 297   2                                      break;
+ 298   2                              case DQ05:
+ 299   2                                      disp[5] = SYM_D;
+ 300   2                                      disp[4] = SYM_O;
+ 301   2                                      disp[3] = SYM__;
+ 302   2                                      disp[2] = 4;
+C51 COMPILER V9.52.0.0   DISP                                                              01/28/2016 10:05:47 PAGE 6   
+
+ 303   2                                      break;
+ 304   2                              case DQ06:
+ 305   2                                      disp[5] = SYM_D;
+ 306   2                                      disp[4] = SYM_O;
+ 307   2                                      disp[3] = SYM__;
+ 308   2                                      disp[2] = 5;
+ 309   2                                      break;
+ 310   2                              case ERR_SP:
+ 311   2                                      disp[5] = SYM_E;
+ 312   2                                      disp[4] = SYM_R;
+ 313   2                                      disp[3] = SYM_R;
+ 314   2                                      disp[2] = SYM__;
+ 315   2                                      disp[1] = SYM_S;
+ 316   2                                      disp[0] = SYM_P;
+ 317   2                                      break;
+ 318   2                              case ERR_LS:
+ 319   2                                      disp[5] = SYM_E;
+ 320   2                                      disp[4] = SYM_R;
+ 321   2                                      disp[3] = SYM_R;
+ 322   2                                      disp[2] = SYM__;
+ 323   2                                      disp[1] = SYM_L;
+ 324   2                                      disp[0] = SYM_S;
+ 325   2                                      break;
+ 326   2                              case ERR_HP:
+ 327   2                                      disp[5] = SYM_E;
+ 328   2                                      disp[4] = SYM_R;
+ 329   2                                      disp[3] = SYM_R;
+ 330   2                                      disp[2] = SYM__;
+ 331   2                                      disp[1] = SYM_H;
+ 332   2                                      disp[0] = SYM_P;
+ 333   2                                      break;
+ 334   2                              case ERR_OH:
+ 335   2                                      disp[5] = SYM_E;
+ 336   2                                      disp[4] = SYM_R;
+ 337   2                                      disp[3] = SYM_R;
+ 338   2                                      disp[2] = SYM__;
+ 339   2                                      disp[1] = SYM_O;
+ 340   2                                      disp[0] = SYM_H;
+ 341   2                                      break;
+ 342   2                              case ERR_OL:
+ 343   2                                      disp[5] = SYM_E;
+ 344   2                                      disp[4] = SYM_R;
+ 345   2                                      disp[3] = SYM_R;
+ 346   2                                      disp[2] = SYM__;
+ 347   2                                      disp[1] = SYM_O;
+ 348   2                                      disp[0] = SYM_L;
+ 349   2                                      break;          
+ 350   2                              case E00:
+ 351   2                              case E01:
+ 352   2                              case E02:
+ 353   2                              case E03:
+ 354   2                              case E04:
+ 355   2                              case E05:
+ 356   2                              case E06:
+ 357   2                              case E07:
+ 358   2                              case E08:
+ 359   2                              case E09:
+ 360   2                              case E10:
+ 361   2                              case E11:
+ 362   2                              case E12:
+ 363   2                              case E13:
+ 364   2                              case E14:
+C51 COMPILER V9.52.0.0   DISP                                                              01/28/2016 10:05:47 PAGE 7   
+
+ 365   2                              case E15:
+ 366   2                                      disp[0] = (disp_code - 0X80)%10;        //错误编号低位
+ 367   2                                      disp[1] = (disp_code - 0X80)/10;        //错误编号高位
+ 368   2                                      disp[2] = SYM__;                                        
+ 369   2                                      disp[3] = SYM_R;                                        
+ 370   2                                      disp[4] = SYM_R;                                        
+ 371   2                                      disp[5] = SYM_E;                                        
+ 372   2                                      break;
+ 373   2                              case MF01:
+ 374   2                              case MF02:
+ 375   2                              case MF03:
+ 376   2                              case MF04:
+ 377   2                              case MF05:
+ 378   2                              case MF06:
+ 379   2                              case MF07:
+ 380   2                              case MF08:
+ 381   2                              case MF09:
+ 382   2                              case MF10:
+ 383   2                              case MF11:
+ 384   2                              case MF12:      
+ 385   2                                      disp[1] = (disp_code - 0X20)%10;        //错误编号低位
+ 386   2                                      disp[2] = (disp_code - 0X20)/10;        //错误编号高位                                          
+ 387   2                                      disp[3] = SYM___;                                       
+ 388   2                                      disp[4] = SYM___;                                       
+ 389   2                                      disp[5] = SYM_F;                                        
+ 390   2                                      break;
+ 391   2                              case MD01:
+ 392   2                              case MD02:
+ 393   2                                      disp[1] = (disp_code - 0X37)%10;        //错误编号低位
+ 394   2                                      disp[2] = (disp_code - 0X37)/10;        //错误编号高位                                          
+ 395   2                                      disp[3] = SYM___;                                       
+ 396   2                                      disp[4] = SYM_P;                                        
+ 397   2                                      disp[5] = SYM_D;
+ 398   2                                      break;
+ 399   2                              case 0x91:
+ 400   2                              case 0x92:
+ 401   2                              case 0x93:
+ 402   2                              case 0x94:
+ 403   2                              case 0x95:
+ 404   2                              case 0x96:
+ 405   2                              case 0x97:
+ 406   2                              case 0x98:
+ 407   2                              case 0x99:
+ 408   2                                      disp[0] = SYM_N;
+ 409   2                                      disp[1] = SYM_O;
+ 410   2                                      disp[2] = SYM__;                                        
+ 411   2                                      disp[3] = disp_code - 0x90;                                     
+ 412   2                                      disp[4] = SYM_I;                                                                                
+ 413   2                                      break;
+ 414   2                              case O1_ON:
+ 415   2                              case O2_ON:
+ 416   2                              case O3_ON:
+ 417   2                              case O4_ON:
+ 418   2                              case O5_ON:
+ 419   2                                      disp[0] = SYM_N;
+ 420   2                                      disp[1] = SYM_O;
+ 421   2                                      disp[2] = SYM__;
+ 422   2                                      disp[3] = disp_code - 0x60;
+ 423   2                                      disp[4] = SYM_O;
+ 424   2                                      break;
+ 425   2                              case O1_OFF:
+ 426   2                              case O2_OFF:
+C51 COMPILER V9.52.0.0   DISP                                                              01/28/2016 10:05:47 PAGE 8   
+
+ 427   2                              case O3_OFF:
+ 428   2                              case O4_OFF:
+ 429   2                              case O5_OFF:
+ 430   2                                      disp[0] = SYM_F;
+ 431   2                                      disp[1] = SYM_F;
+ 432   2                                      disp[2] = SYM_O;
+ 433   2                                      disp[3] = SYM__;
+ 434   2                                      disp[4] = disp_code - 0x65;
+ 435   2                                      disp[5] = SYM_O;
+ 436   2                                      break;
+ 437   2                  case TIMEOUT:
+ 438   2                      disp[0] = SYM_T;
+ 439   2                                      disp[1] = SYM_U;
+ 440   2                                      disp[2] = SYM_O;
+ 441   2                                      disp[3] = SYM__;
+ 442   2                                      disp[4] = SYM_T;
+ 443   2                      break;
+ 444   2                              default :
+ 445   2                                      disp[0] = SYM_E;
+ 446   2                                      disp[1] = SYM_D;
+ 447   2                                      disp[2] = SYM_O;
+ 448   2                                      disp[3] = SYM_C;
+ 449   2                                      disp[4] = SYM_O;
+ 450   2                                      disp[5] = SYM_N;
+ 451   2                              }
+ 452   1              disp_seg(seg_sym[disp[0]],BIT0);
+ 453   1              disp_seg(seg_sym[disp[1]],BIT1);
+ 454   1              disp_seg(seg_sym[disp[2]],BIT2);
+ 455   1              disp_seg(seg_sym[disp[3]],BIT3);
+ 456   1              disp_seg(seg_sym[disp[4]],BIT4);
+ 457   1              disp_seg(seg_sym[disp[5]],BIT5);
+ 458   1              //delay_ms(1);
+ 459   1              }
+ 460          /*闪烁显示函数*****************************************************************
+ 461          形参:
+ 462                  disp_data       :显示数据,三位小数点
+ 463          返回值:
+ 464          *******************************************************************************/
+ 465          void flash_disp(s32bit disp_data)
+ 466                  {
+ 467   1              disp_symbol(CLR_ALL);
+ 468   1              delay_ms(100);
+ 469   1              weight_disp(disp_data);
+ 470   1              delay_ms(100);
+ 471   1              return;
+ 472   1              }
+ 473          /*整型数据显示函数*************************************************************
+ 474          形参:
+ 475                  disp_data       :显示数据,无小数点
+ 476          返回值:
+ 477          *******************************************************************************/
+ 478          void disp_int(u16bit disp_data)
+ 479                  {
+ 480   1              u8bit xdata n,disp[6] = {28,28,28,28,28,28};
+ 481   1              for(n = 0;n<6;n++)                                              //求数据每一位的值
+ 482   1                      {
+ 483   2                      disp[n] = disp_data%10;
+ 484   2                      disp_data /= 10;
+ 485   2                      }
+ 486   1              if(disp[5] == 0)        disp[5] = SYM_;
+ 487   1              if((disp[4] == 0) && (disp[5] == SYM_)) disp[4] = SYM_;
+ 488   1              if((disp[3] == 0) && (disp[4] == SYM_)) disp[3] = SYM_;
+C51 COMPILER V9.52.0.0   DISP                                                              01/28/2016 10:05:47 PAGE 9   
+
+ 489   1              if((disp[2] == 0) && (disp[3] == SYM_)) disp[2] = SYM_;
+ 490   1              if((disp[1] == 0) && (disp[2] == SYM_)) disp[1] = SYM_;
+ 491   1                      
+ 492   1              disp_seg(seg_sym[disp[0]],BIT0);
+ 493   1              disp_seg(seg_sym[disp[1]],BIT1);
+ 494   1              disp_seg(seg_sym[disp[2]],BIT2);
+ 495   1              disp_seg(seg_sym[disp[3]],BIT3);
+ 496   1              disp_seg(seg_sym[disp[4]],BIT4);
+ 497   1              disp_seg(seg_sym[disp[5]],BIT5);
+ 498   1              delay_ms(1);
+ 499   1              return;                                 
+ 500   1              }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   2290    ----
+   CONSTANT SIZE    =     92    ----
+   XDATA SIZE       =   ----      27
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----      15
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----       2
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

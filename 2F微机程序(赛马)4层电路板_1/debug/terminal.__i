@@ -1,0 +1,1 @@
+"terminal.c" OPTIMIZE (7,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\debug\terminal.lst) OBJECT(.\debug\terminal.obj)

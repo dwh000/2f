@@ -1,0 +1,12 @@
+".\debug\STARTUP.obj",
+".\debug\24c04.obj",
+".\debug\disp.obj",
+".\debug\key_func.obj",
+".\debug\main.obj",
+".\debug\menu_func.obj",
+".\debug\public.obj",
+".\debug\timer.obj",
+".\debug\weighting.obj",
+".\debug\terminal.obj" 
+TO ".\debug\2F-0-tst" 
+PRINT(".\debug\2F-0-tst.m51") RAMSIZE(256) 

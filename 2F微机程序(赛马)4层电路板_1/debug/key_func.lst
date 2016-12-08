@@ -1,0 +1,93 @@
+C51 COMPILER V9.52.0.0   KEY_FUNC                                                          01/28/2016 10:05:47 PAGE 1   
+
+
+C51 COMPILER V9.52.0.0, COMPILATION OF MODULE KEY_FUNC
+OBJECT MODULE PLACED IN .\debug\key_func.obj
+COMPILER INVOKED BY: D:\Program Files (x86)\keil\C51\BIN\C51.EXE key_func.c OPTIMIZE(7,SPEED) BROWSE DEBUG OBJECTEXTEND 
+                    -PRINT(.\debug\key_func.lst) OBJECT(.\debug\key_func.obj)
+
+line level    source
+
+   1          #include "key_func.h"
+   2          #include "timer.h"
+   3          
+   4          u8bit get_key(u8bit chk_val)
+   5                  {
+   6   1              u8bit xdata key_value,i;
+   7   1              for(i = 0;i < 4;i++)
+   8   1                      {
+   9   2                      key_value = (P1 & 0xf8);
+  10   2                      switch(chk_val)
+  11   2                              {
+  12   3                              case CHK_ALL_KEY:
+  13   3                                      if(key_value == NOKEY_CLOSED)   return key_value;
+  14   3                                      break;
+  15   3                              case SET_RELEASE:
+  16   3                              case ENT_RELEASE:
+  17   3                              case UP_RELEASE:
+  18   3                              case DWN_RELEASE:
+  19   3                              case CLR_RELEASE:
+  20   3                                      if(key_value == (~chk_val))             return key_value;
+  21   3                                      break;
+  22   3                              case UD_RELEASE:
+  23   3                                      if(key_value == UP_CLOSED)              return NOKEY_CLOSED;
+  24   3                                      if(key_value == DWN_CLOSED)             return NOKEY_CLOSED;
+  25   3                                      break;
+  26   3                              case SET_CLOSED:
+  27   3                              case ENT_CLOSED:
+  28   3                              case UP_CLOSED:
+  29   3                              case DWN_CLOSED:
+  30   3                              case CLR_CLOSED:
+  31   3                                      if(key_value != chk_val)                return NOKEY_CLOSED;
+  32   3                                      break;
+  33   3                              default:
+  34   3                                      return chk_val; 
+  35   3                              }
+  36   2                      delay_ms(30);
+  37   2                      }
+  38   1              delay_ms(120);
+  39   1              if(chk_val == CHK_ALL_KEY)      return key_value;
+  40   1              else    return chk_val;
+  41   1              }
+  42                  
+  43          u8bit get_input(void)
+  44                  {
+  45   1              u8bit xdata key_value,i;
+  46   1              for(i = 0;i < 4;i++)
+  47   1                      {
+  48   2                      if((P1 & 0X01) == 0X01) break;
+  49   2                      delay_ms(3);
+  50   2                      }
+  51   1              if(i == 4)      return 0x96;                                            //皮带连锁
+  52   1              for(i = 0;i < 4;i++)
+  53   1                      {
+  54   2                      if(P2 == 0Xff)  return 0X20;
+C51 COMPILER V9.52.0.0   KEY_FUNC                                                          01/28/2016 10:05:47 PAGE 2   
+
+  55   2                      delay_ms(3);
+  56   2                      }
+  57   1              key_value =P2;
+  58   1              if((key_value & BIT0) == 0)     return 0x95;            //插袋点
+  59   1              if((key_value & BIT1) == 0)     return 0x96;            //皮带连锁信号
+  60   1              if((key_value & BIT2) == 0)     return 0x97;            //开闸门信号
+  61   1              if((key_value & BIT3) == 0)     return 0x98;            //掉袋点信号
+  62   1              if((key_value & BIT4) == 0)     return 0x92;            //检重秤-校正信号
+  63   1              if((key_value & BIT5) == 0)     return 0x91;            //检重秤+校正信号
+  64   1              if((key_value & BIT6) == 0)     return 0x93;            //插袋信号
+  65   1              if((key_value & BIT7) == 0)     return 0x94;            //清零点
+  66   1              return 0X20;
+  67   1              }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    296    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----       4
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----       1
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

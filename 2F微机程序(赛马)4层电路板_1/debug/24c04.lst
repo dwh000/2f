@@ -1,0 +1,420 @@
+C51 COMPILER V9.52.0.0   24C04                                                             01/28/2016 10:05:47 PAGE 1   
+
+
+C51 COMPILER V9.52.0.0, COMPILATION OF MODULE 24C04
+OBJECT MODULE PLACED IN .\debug\24c04.obj
+COMPILER INVOKED BY: D:\Program Files (x86)\keil\C51\BIN\C51.EXE 24c04.c OPTIMIZE(7,SPEED) BROWSE DEBUG OBJECTEXTEND PRI
+                    -NT(.\debug\24c04.lst) OBJECT(.\debug\24c04.obj)
+
+line level    source
+
+   1          /*******************************************************************************
+   2          *文件名: 24c04.c
+   3          *作  者: 王文辉
+   4          *单  位: 唐山智能电子有限公司
+   5          *日  期: 2012-9-21
+   6          *版  本: 实验版本
+   7          *功能描述: 使用c8051的硬件I2C外设写的I2C模块程序,包含初始化和读写程序.
+   8          *******************************************************************************/
+   9          #include "24c04.h"
+  10          #include "timer.h"
+  11          
+  12          #define WR  0
+  13          #define RD  1
+  14          
+  15          sbit SDA    = P0^2;
+  16          sbit SCL    = P0^3;
+  17          sbit EE_WP  = P0^4;
+  18          
+  19          //IO模拟I2C硬件层代码..
+  20          void scl_0(void)
+  21          {
+  22   1          SCL = 0;
+  23   1      }
+  24          void scl_1(void)
+  25          {
+  26   1          SCL = 1;
+  27   1      }
+  28          void sda_0(void)
+  29          {
+  30   1          SDA = 0;
+  31   1      }
+  32          void sda_1(void)
+  33          {
+  34   1          SDA = 1;
+  35   1      }
+  36          //*************************************************
+  37          //原型: void I2C_start(void);
+  38          //功能: i2c总线建立起始条件
+  39          //入口: 无
+  40          //出口: 无
+  41          //返回值:无
+  42          //*************************************************
+  43          void I2C_start(void)
+  44          {
+  45   1          sda_1();
+  46   1      
+  47   1          scl_1();
+  48   1      
+  49   1          sda_0();
+  50   1      
+  51   1          scl_0();
+  52   1      }
+  53          
+  54          //*************************************************
+C51 COMPILER V9.52.0.0   24C04                                                             01/28/2016 10:05:47 PAGE 2   
+
+  55          //原型: void I2C_stop(void);
+  56          //功能: i2c总线建立结束条件
+  57          //入口: 无
+  58          //出口: 无
+  59          //返回值:无
+  60          //*************************************************
+  61          void I2C_stop(void)
+  62          {
+  63   1          scl_1();
+  64   1      
+  65   1          sda_0();
+  66   1      
+  67   1          sda_1();
+  68   1      }
+  69          //*************************************************
+  70          //原型: void ack(bool a);
+  71          //功能: i2c总线应答
+  72          //
+  73          //出口: 无
+  74          //返回值:无
+  75          //*************************************************
+  76          void ack(u8bit a)
+  77          {
+  78   1          if(a)
+  79   1              sda_0();
+  80   1           else
+  81   1              sda_1();
+  82   1      
+  83   1          scl_1();
+  84   1      
+  85   1          scl_0();
+  86   1      }
+  87          
+  88          //*************************************************
+  89          //原型: bool I2C_ack();
+  90          //功能: i2c总线应答
+  91          //
+  92          //出口: 无
+  93          //返回值:有应答,返回1;无应答,返回0.
+  94          //*************************************************
+  95          u8bit I2C_ack()
+  96          {
+  97   1          u8bit ack=1;
+  98   1          //sda_1();
+  99   1          scl_0();
+ 100   1      
+ 101   1          scl_1();
+ 102   1      
+ 103   1          if(SDA){
+ 104   2              ack=0;
+ 105   2          }
+ 106   1      
+ 107   1          scl_0();
+ 108   1      
+ 109   1          return ack;
+ 110   1      }
+ 111          
+ 112          
+ 113          //**************************************************
+ 114          //原型: void  wr_byte(uchar c);
+ 115          //功能: 写一个字节的数据
+ 116          //入口: c       需要传送的数据
+C51 COMPILER V9.52.0.0   24C04                                                             01/28/2016 10:05:47 PAGE 3   
+
+ 117          //出口: 无
+ 118          //返回值:无
+ 119          //**************************************************
+ 120          void  wr_byte(uchar c)
+ 121          {
+ 122   1          uchar BitCnt;
+ 123   1      
+ 124   1          for(BitCnt=0;BitCnt<8;BitCnt++){
+ 125   2              if((c<<BitCnt)&0x80) sda_1();
+ 126   2              else  sda_0();
+ 127   2              
+ 128   2              scl_1();                            //置时钟线为高，通知被控器开始接收数据位
+ 129   2              
+ 130   2              scl_0();
+ 131   2          }
+ 132   1      }
+ 133          
+ 134          //**************************************************
+ 135          //原型: uchar rd_byte(void);
+ 136          //功能: 读一个字节的数据
+ 137          //入口: 无
+ 138          //出口: 无
+ 139          //返回值:读出的数据
+ 140          //**************************************************
+ 141          uchar rd_byte(void)
+ 142          {
+ 143   1          uchar retc=0;
+ 144   1          uchar BitCnt;
+ 145   1      
+ 146   1          sda_1();
+ 147   1      
+ 148   1          for(BitCnt=0;BitCnt<8;BitCnt++){
+ 149   2              scl_1();
+ 150   2              
+ 151   2              retc<<=1;
+ 152   2              if(SDA) retc += 1; /*读数据位,接收的数据位放入retc中 */
+ 153   2      
+ 154   2              scl_0();
+ 155   2          }
+ 156   1      
+ 157   1          return (retc);
+ 158   1      }
+ 159          
+ 160          
+ 161          //IIC总线的初始化程序
+ 162          void iic_init(void)
+ 163          {
+ 164   1      //    SFRPAGE =   SMB0_PAGE;
+ 165   1          EE_WP =     1;                      //eeprom写保护开启
+ 166   1      //    EIE1 &=     0XFD;                   //禁止SMB0中断
+ 167   1      //    SMB0CR =    236;                    //设置时钟频率大概是400k,该数值不大于239,数值越小,频率越低!
+ 168   1      //    SMB0CN =    0x44;                   //使能SMBus0,发送确认信号;
+ 169   1      //    SFRPAGE =   CONFIG_PAGE;
+ 170   1      }
+ 171          /*u8bit ee_read(u8bit *ptr_data,u8bit addr,u8bit cnt) reentrant
+ 172          {
+ 173              u8bit count;
+ 174              u16bit i = 0;
+ 175          
+ 176              SFRPAGE = SMB0_PAGE;                //选择SFR页为SMB0页
+ 177              SI = 0;
+ 178              AA = 1;                             //AA初始设置为发送应答信号
+C51 COMPILER V9.52.0.0   24C04                                                             01/28/2016 10:05:47 PAGE 4   
+
+ 179              STA = 1;                            //1发送一个起始条件
+ 180              for(count = 0;count < cnt ;){
+ 181                  while(SI == 0){                 //如果总线长时间没有反应,将返回失败标识
+ 182                      if(++i > 20000){
+ 183                          STO = 1;
+ 184                          return 0xfe;
+ 185                      }
+ 186                  }
+ 187                  switch(SMB0STA){
+ 188                                  case 0X00:                  //总线错误; 返回失败标志
+ 189                                          STO = 1;
+ 190                                          return 0X00;
+ 191                                  case 0X08:                  //2起始条件完成;发送从地址+W,清STA
+ 192                                          SMB0DAT = 0Xa0 + WR;
+ 193                                          STA = 0;
+ 194                                          break;
+ 195                                  case 0x10:                  //5重启条件已发送;发送从地址+R,清STA
+ 196                                          SMB0DAT = 0Xa0 + RD;
+ 197                                          STA = 0;
+ 198                                          break;
+ 199                                  case 0X18:                  //3从地址+W已发出,收到ACK;发送操作地址
+ 200                                          SMB0DAT = addr;
+ 201                                          break;
+ 202                                  case 0X28:                  //4数据字节已发出,收到ACK;  置位STA,发送重复起始条件
+ 203                                          STA = 1;
+ 204                                          break;
+ 205                                  case 0x40:                  //6从地址+R已发出,收到ACK;如果只发送1字节,清AA,
+ 206                                          if(cnt == 1)    AA = 0; //                                      等待接收数据
+ 207                                          break;
+ 208                                  case 0X50:              //7数据字节已收到,ACK已发出;读SMB0DAT,等待下一字节
+ 209                                          *ptr_data = SMB0DAT;    //,如果是下个字节最后一个字节,清AA
+ 210                                          ptr_data++;
+ 211                                          count++;
+ 212                                          if(count == (cnt - 1))  AA = 0;
+ 213                                          break;
+ 214                                  case 0x48:              //从地址+R已发出,收到NACK;返回失败标志
+ 215                                          STO = 1;
+ 216                                          return 0x48;
+ 217                                  case 0x58:              //8数据字节已收到,NACK已发出;置位STO,发送结束条件
+ 218                                          *ptr_data = SMB0DAT;
+ 219                                          STO = 1;
+ 220                                          count++;
+ 221                                          break;
+ 222                                  case 0x38:              //竞争失败;     返回失败标志
+ 223                                          STO = 1;
+ 224                                          return 0x38;
+ 225                                  default:
+ 226                                          STO = 1;
+ 227                                          return SMB0STA;
+ 228                          }
+ 229                          SI = 0;
+ 230                  }
+ 231                  SFRPAGE = CONFIG_PAGE;
+ 232                  return 0XFD;                    //返回完成标志
+ 233          }
+ 234          u8bit ee_write(u8bit *ptr_data,u8bit addr,u8bit cnt) reentrant 
+ 235          {
+ 236                  u8bit count;
+ 237                  u16bit i = 0;
+ 238                  
+ 239                  EE_WP = 0;                                                      //关闭写保护
+ 240                  SFRPAGE = SMB0_PAGE;                            //选择SFR页为SMB0页
+C51 COMPILER V9.52.0.0   24C04                                                             01/28/2016 10:05:47 PAGE 5   
+
+ 241                  SI = 0;                                                         
+ 242                  
+ 243                  STA = 1;                        //1发送一个起始条件
+ 244                  for(count = 0;count < cnt + 1;){
+ 245                          while(SI == 0){ //如果总线长时间没有反应,将返回失败标识
+ 246                                  if(++i > 20000){
+ 247                                          STO = 1;
+ 248                                          return 0xfe;
+ 249                                  }
+ 250                          }
+ 251                          switch(SMB0STA){
+ 252                                  case 0X00:              //总线错误;返回失败标志
+ 253                                          STO = 1;
+ 254                                          return 0X00;
+ 255                                  case 0X08:              //2起始条件完成;发送从地址+W/R,清STA
+ 256                                          SMB0DAT = 0Xa0 + WR;
+ 257                                          STA = 0;
+ 258                                          break;
+ 259                                  case 0X18:              //3从地址+W/R已发出,收到ACK;发送操作地址
+ 260                                          SMB0DAT = addr;
+ 261                                          break;
+ 262                                  case 0x28:              //4数据字节已发出,收到ACK;发送数据
+ 263                                          if(count == cnt){
+ 264                                                  STO = 1;
+ 265                                                  count++;
+ 266                                                  break;
+ 267                                          }
+ 268                                          SMB0DAT = *ptr_data;
+ 269                                          ptr_data++;
+ 270                                          count++;
+ 271                                          break;
+ 272                                  case 0x20:              //从地址+W已发出,收到NACK;返回失败标志
+ 273                                          STO = 1;
+ 274                                          return 0x20;
+ 275                                  case 0x30:              //数据字节已发出,收到NACK;返回失败标志
+ 276                                          STO = 1;
+ 277                                          return 0x30;
+ 278                                  case 0x38:              //竞争失败;返回失败标志
+ 279                                          STO = 1;
+ 280                                          return 0x38;
+ 281                                  default:
+ 282                                          STO = 1;
+ 283                                          return SMB0STA;
+ 284                          }
+ 285                          SI = 0;
+ 286                  }
+ 287                  SFRPAGE = CONFIG_PAGE;
+ 288                  //delay_ms(5);
+ 289                  i=20000;
+ 290                  while(i--);
+ 291                  EE_WP = 1;                                                      //开启写保护
+ 292                  return 0XFD;                                            //返回完成标志
+ 293          }
+ 294          
+ 295          */
+ 296          
+ 297          u8bit ee_write(u8bit *ptr_data,u8bit addr,u8bit cnt) reentrant
+ 298          {
+ 299   1          EE_WP =     0;
+ 300   1          delay_ms(10);
+ 301   1          I2C_start();
+ 302   1      
+C51 COMPILER V9.52.0.0   24C04                                                             01/28/2016 10:05:47 PAGE 6   
+
+ 303   1          wr_byte(0Xa0 + WR);
+ 304   1          if(!I2C_ack())  return 0;
+ 305   1              
+ 306   1          wr_byte(addr);
+ 307   1          if(!I2C_ack())  return 0;
+ 308   1      
+ 309   1          while(cnt){
+ 310   2              wr_byte(*ptr_data);
+ 311   2              if(!I2C_ack())  return 0;
+ 312   2              ptr_data++;
+ 313   2              cnt--;
+ 314   2          }
+ 315   1          I2C_stop();
+ 316   1          EE_WP =     1;
+ 317   1          return 0XFD;
+ 318   1      }
+ 319          ee_read(u8bit *ptr_data,u8bit addr,u8bit cnt) reentrant
+ 320          {
+ 321   1          cnt--;
+ 322   1      
+ 323   1          I2C_start();
+ 324   1      
+ 325   1          wr_byte(0Xa0 + WR);
+ 326   1          if(!I2C_ack())  return 0;
+ 327   1      
+ 328   1          wr_byte(addr);
+ 329   1          if(!I2C_ack())  return 0;
+ 330   1      
+ 331   1          I2C_start();
+ 332   1      
+ 333   1          wr_byte(0Xa0 + RD);
+ 334   1          if(!I2C_ack())  return 0;
+ 335   1      
+ 336   1          while(cnt){
+ 337   2              *ptr_data=rd_byte();
+ 338   2              ptr_data++;
+ 339   2              cnt--;
+ 340   2              ack(1);
+ 341   2          }
+ 342   1      
+ 343   1          *ptr_data=rd_byte();
+ 344   1          ack(0);
+ 345   1          I2C_stop();
+ 346   1          return 0xfd;
+ 347   1      }
+ 348          
+ 349          
+ 350          /*eeprom读取数据程序*********************************************
+ 351          形参:
+ 352              ptr_data        :数据区的首地址
+ 353              addr            :读取的目标地址
+ 354              cnt             :要读取的数据的个数.
+ 355          返回值:
+ 356          ******************************************************************/     
+ 357          u8bit eeprom_read(u8bit *ptr_data,u8bit addr,u8bit cnt)
+ 358          {
+ 359   1          u8bit err;
+ 360   1          err =  ee_read(ptr_data,addr,cnt);
+ 361   1          if(err == 0XFD) return RD_DONE;
+ 362   1          return E03;
+ 363   1      }
+ 364          
+C51 COMPILER V9.52.0.0   24C04                                                             01/28/2016 10:05:47 PAGE 7   
+
+ 365          /*eeprom保存数据程序*********************************************
+ 366          形参:
+ 367              ptr_data        :数据区的首地址
+ 368              addr            :保存的目标地址
+ 369              cnt             :要保存的数据的个数.
+ 370          返回值:
+ 371          ******************************************************************/
+ 372          u8bit eeprom_write(u8bit *ptr_data,u8bit addr,u8bit cnt) reentrant
+ 373          {
+ 374   1          u8bit count,test[8];
+ 375   1          if(ee_write(ptr_data,addr,cnt) == 0XFD){
+ 376   2              if(ee_read(test,addr,cnt) == 0XFD){
+ 377   3                  for(count = 0;count < cnt;count ++){
+ 378   4                      if(test[count] != ptr_data[count])  return E05;
+ 379   4                  }
+ 380   3                  return WR_DONE;
+ 381   3              }
+ 382   2          }
+ 383   1          return E04;
+ 384   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    626    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----       5
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

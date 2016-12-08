@@ -1,0 +1,1 @@
+"disp.c" OPTIMIZE (7,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\debug\disp.lst) OBJECT(.\debug\disp.obj)

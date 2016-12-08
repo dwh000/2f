@@ -1,0 +1,12 @@
+del *.obj
+del *.map
+del *.bak
+del *.pwi
+del *.sdf
+del *.lst
+del *.opt
+del *.lnp
+del *.ls1
+del *.m51
+del *.dbk
+del *.plg

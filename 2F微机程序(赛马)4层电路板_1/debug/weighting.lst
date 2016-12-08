@@ -1,0 +1,288 @@
+C51 COMPILER V9.52.0.0   WEIGHTING                                                         02/01/2016 09:39:22 PAGE 1   
+
+
+C51 COMPILER V9.52.0.0, COMPILATION OF MODULE WEIGHTING
+OBJECT MODULE PLACED IN .\debug\weighting.obj
+COMPILER INVOKED BY: D:\Program Files (x86)\keil\C51\BIN\C51.EXE weighting.c OPTIMIZE(7,SPEED) BROWSE DEBUG OBJECTEXTEND
+                    - PRINT(.\debug\weighting.lst) OBJECT(.\debug\weighting.obj)
+
+line level    source
+
+   1          /*******************************************************************************
+   2          *文件名: weighting.c
+   3          *作  者: 王文辉
+   4          *单  位: 唐山智能电子有限公司
+   5          *日  期: 2012-9-21
+   6          *版  本: 实验版本
+   7          *功能描述: AD转换及称重测量程序
+   8          *******************************************************************************/
+   9          #include "weighting.h"
+  10          
+  11          #define SAMPLE_LENGTH   20
+  12          #define POLAR   0                       //0定义单极性,1定义为双极性
+  13          
+  14          extern s32bit xdata tare_weight;
+  15          extern s16bit xdata     zero_scale_value;
+  16          extern u32bit xdata filter2_out,load_cell_span;
+  17          extern u32bit xdata scale_output_val,scale_counterweight_val;
+  18          extern u8bit xdata filter_coefficient1;
+  19          
+  20          sbit ADC_BP             = P5^0; //=1为双极性控制,=0为单极性控制
+  21          sbit ADC_SMODE  = P5^1; //串行接口模式控制,1为自同步模式,0为外部时钟同步模式
+  22          sbit ADC_CS             = P5^2; //片选端,0为串口可被外部设备使用,为1 SDO及SCLK为高阻态.
+  23          sbit ADC_RDY    = P5^3; //转换完成指示,=0表示转换完成,可以从串口读出;数据读出完
+  24                                                          //成后为1
+  25          sbit ADC_SCLK   = P5^4; //串口时钟
+  26          sbit ADC_SDO    = P5^5; //串口数据
+  27          sbit ADC_CONV   = P5^7; //=0启动一个转换,如果转换完成RDY变为0后,此端口依然被
+  28                                                          //置零,会重新启动一次转换
+  29          sbit ADC_RST    = P5^6; //复位控制端.
+  30          /*双极性转换程序,包含了负数的字节扩展和负数迁移为零的程序*/
+  31          #if     POLAR
+              /*******************************************************************************
+              *原  型:void adc_init(void)
+              *形  参:无.
+              *功  能:AD转换器初始化程序
+              *返回值:无.
+              *******************************************************************************/
+              void adc_init(void)
+              {
+                      u8bit cnt;
+                      SFRPAGE = CONFIG_PAGE;
+                      ADC_RST = 0;
+                      _nop_();
+                      _nop_();
+                      _nop_();
+                      ADC_RST = 1;
+                      ADC_BP  = 1;                            //双极性转换
+                      ADC_SMODE = 0;                          //外部时钟同步模式
+                      ADC_CS = 1;                                     //ADC串口禁止
+                      ADC_SCLK = 0;                           //时钟线拉低
+                      ADC_CONV = 1;                           //禁止ADC转换.
+              }
+              /*******************************************************************************
+              *原  型:u32bit get_adc(void)
+C51 COMPILER V9.52.0.0   WEIGHTING                                                         02/01/2016 09:39:22 PAGE 2   
+
+              *形  参:无.
+              *功  能:进行一次AD转换,并读取转换结果
+              *返回值:无符号32位数值          AD转换的结果
+              *******************************************************************************/
+              u32bit get_adc(void)
+              {
+                      u8bit i,sign_flag = 0;
+                      s32bit ad_buf = 0;
+                      u32bit ad_result;
+                      SFRPAGE = CONFIG_PAGE;
+                      EA = 0;
+                      ADC_CONV = 0;
+                      for(i=0; i<220;i++)     ;
+                      ADC_CONV = 1;
+                      while(ADC_RDY == 1)     _nop_();
+                      _nop_();
+                      ADC_CS = 0;
+                      _nop_();
+                      if(ADC_SDO == 1)        sign_flag = 1;
+                      else    sign_flag = 0;
+                      for(i=0; i<24;){
+                              ad_buf <<= 1;
+                              if(ADC_SDO == 1)        ad_buf += 1;
+                              ADC_SCLK = 1;
+                              i++;
+                              ADC_SCLK = 0;
+                      }
+                      ADC_CS = 1;
+                      if(sign_flag == 1)      ad_buf |= 0xff000000;
+                      ad_buf *= 2;
+                      ad_result = ad_buf + 0x800000;
+                      EA = 1;
+                      return ad_result;
+              }
+              /*单性转换程序*/
+              #else
+  91          void adc_init(void)
+  92          {
+  93   1              //u8bit cnt;
+  94   1              SFRPAGE = CONFIG_PAGE;
+  95   1              ADC_RST = 0;
+  96   1              _nop_();
+  97   1              _nop_();
+  98   1              _nop_();
+  99   1              ADC_RST = 1;
+ 100   1              ADC_BP  = 0;                            //单极性转换
+ 101   1              ADC_SMODE = 0;                          //外部时钟同步模式
+ 102   1              ADC_CS = 1;                                     //ADC串口禁止
+ 103   1              ADC_SCLK = 0;                           //时钟线拉低
+ 104   1              ADC_CONV = 1;                           //禁止ADC转换.
+ 105   1      }
+ 106                  
+ 107          u8bit get_adc(u32bit *pADVal)
+ 108          {
+ 109   1              u8bit i;
+ 110   1              u16bit mmm = 0;
+ 111   1              u32bit ad_buf = 0;
+ 112   1              EA = 0;
+ 113   1              SFRPAGE = CONFIG_PAGE;
+ 114   1              adc_init();
+ 115   1              ADC_CONV = 0;
+ 116   1              while(ADC_RDY){
+C51 COMPILER V9.52.0.0   WEIGHTING                                                         02/01/2016 09:39:22 PAGE 3   
+
+ 117   2                      mmm++;
+ 118   2                      if(mmm>0x200)
+ 119   2                      return BAD_VAL;
+ 120   2              }
+ 121   1              ADC_CONV = 1;
+ 122   1              _nop_();
+ 123   1              ADC_CS = 0;
+ 124   1              _nop_();
+ 125   1              for(i=0; i<24;){
+ 126   2                      ad_buf <<= 1;
+ 127   2                      if(ADC_SDO == 1) ad_buf += 1;
+ 128   2                      else _nop_();
+ 129   2                      ADC_SCLK = 1;
+ 130   2                      i++;
+ 131   2                      ADC_SCLK = 0;
+ 132   2              }
+ 133   1              ADC_CS = 1;
+ 134   1              EA = 1;
+ 135   1              *pADVal = ad_buf;
+ 136   1              if((ad_buf == 0)||(ad_buf == 0xffffff)) return BAD_VAL;
+ 137   1              return GOOD;
+ 138   1      }
+ 139          
+ 140          #endif
+ 141          /*******************************************************************************
+ 142          *原  型:u32bit filter1_func(void)
+ 143          *形  参:无.
+ 144          *功  能:中值平均值滤波函数
+ 145          *返回值:无符号32位数值          中值平均值滤波的结果
+ 146          *******************************************************************************/        
+ 147          u32bit filter1_func(void) 
+ 148          {
+ 149   1              u8bit  cnt;
+ 150   1              u32bit adc_val,adc_min,adc_max,adc_sum,filter1_out;
+ 151   1              while(get_adc(&adc_val) != GOOD) adc_init();
+ 152   1              adc_max = adc_val;
+ 153   1              adc_min = adc_val;
+ 154   1              adc_sum = adc_val;
+ 155   1              for(cnt = 0; cnt < (SAMPLE_LENGTH - 1);cnt++){
+ 156   2                      while(get_adc(&adc_val) != GOOD) adc_init();
+ 157   2                      adc_sum += adc_val;
+ 158   2                      if(adc_val > adc_max)   adc_max = adc_val;
+ 159   2                      else if(adc_val < adc_min)      adc_min = adc_val;
+ 160   2              }
+ 161   1              adc_sum -= adc_max;
+ 162   1              adc_sum -= adc_min;
+ 163   1              filter1_out = adc_sum/(SAMPLE_LENGTH - 2);
+ 164   1              return filter1_out;
+ 165   1      }
+ 166          
+ 167          /*******************************************************************************
+ 168          *原  型:u32bit filter1_clr(void)
+ 169          *形  参:无.
+ 170          *功  能:中值平均值滤波函数
+ 171          *返回值:无符号32位数值          中值平均值滤波的结果
+ 172          *******************************************************************************/        
+ 173          u32bit filter1_clr(void) 
+ 174          {
+ 175   1              u8bit  cnt;
+ 176   1              u32bit adc_val,adc_min,adc_max,adc_sum,filter1_out;
+ 177   1              while(get_adc(&adc_val) != GOOD) ;//adc_init();
+ 178   1              adc_max = adc_val;
+C51 COMPILER V9.52.0.0   WEIGHTING                                                         02/01/2016 09:39:22 PAGE 4   
+
+ 179   1              adc_min = adc_val;
+ 180   1              adc_sum = adc_val;
+ 181   1              for(cnt = 0; cnt < 65;cnt++){
+ 182   2                      while(get_adc(&adc_val) != GOOD) ;//adc_init();
+ 183   2                      adc_sum += adc_val;
+ 184   2                      if(adc_val > adc_max)   adc_max = adc_val;
+ 185   2                      else if(adc_val < adc_min)      adc_min = adc_val;
+ 186   2              }
+ 187   1              adc_sum -= adc_max;
+ 188   1              adc_sum -= adc_min;
+ 189   1              filter1_out = adc_sum>>6;
+ 190   1              return filter1_out;
+ 191   1      }
+ 192          /*******************************************************************************
+ 193          *原  型:u32bit filter2_func(void)
+ 194          *形  参:无.
+ 195          *功  能:一阶低通滤波函数
+ 196          *返回值:无符号32位数值          一阶低通滤波的结果
+ 197          *******************************************************************************/
+ 198          u32bit filter2_func(u32bit filter1_out)
+ 199          {
+ 200   1              filter2_out *= filter_coefficient1;
+ 201   1              filter2_out = filter2_out + (filter1_out * (100-filter_coefficient1));
+ 202   1              filter2_out /= 100;
+ 203   1              return filter2_out; 
+ 204   1      }
+ 205                  
+ 206                  
+ 207          u32bit GW_measure(void)                                 //结果为未标定毛重
+ 208          {
+ 209   1              float result;
+ 210   1              result = filter2_func(filter1_func());
+ 211   1              result *= load_cell_span;
+ 212   1              result /= 0xffffff;
+ 213   1              return ((u32bit)result);
+ 214   1      }
+ 215          s32bit NW_measure(void)                         //结果为未标定净重
+ 216          {
+ 217   1              s32bit result;
+ 218   1              result = GW_measure() - tare_weight;
+ 219   1              return result;
+ 220   1      }
+ 221          
+ 222          s32bit NW_measure_clr(void)                             //结果为未标定净重
+ 223          {
+ 224   1              float result;
+ 225   1              filter2_out = filter1_clr();
+ 226   1              result = filter2_out;
+ 227   1              result *= load_cell_span;
+ 228   1              result /= 0xffffff;
+ 229   1              result = result - tare_weight;
+ 230   1              return ((s32bit)result);
+ 231   1      }
+ 232          /*u32bit GW_scale(void)                                 //结果为标定后的毛重值
+ 233                  {
+ 234                  float result;
+ 235                  result = GW_measure() * scale_counterweight_val / scale_output_val;
+ 236                  //除以标定点砝码输出值
+ 237                  return ((u32bit)result);
+ 238                  }*/
+ 239          s32bit NW_scale(void)                           //结果为标定后的净重值
+ 240          {
+C51 COMPILER V9.52.0.0   WEIGHTING                                                         02/01/2016 09:39:22 PAGE 5   
+
+ 241   1              float result;
+ 242   1              result = NW_measure();
+ 243   1              result *= scale_counterweight_val;
+ 244   1              result /= scale_output_val;
+ 245   1              result -= zero_scale_value;
+ 246   1              return ((s32bit)result);
+ 247   1      }
+ 248          s32bit NW_scale_clr(void)                       //零点清零专用程序
+ 249          {
+ 250   1              float result;
+ 251   1              result = NW_measure_clr();
+ 252   1              result *= scale_counterweight_val;
+ 253   1              result /= scale_output_val;
+ 254   1              result -= zero_scale_value;
+ 255   1              return ((s32bit)result);
+ 256   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1468    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----      61
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
